@@ -39,6 +39,27 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// The four gauges per seat over a window: DAY, FROM..TO or FROM..
+    ///
+    /// Columns, per seat, over the window:
+    ///   lands: landings on the trunk.
+    ///   runs: runner runs.
+    ///   fail: runs that failed.
+    ///   no-reason: failed runs that kept neither a reason nor an output tail.
+    ///   runs/land: runs per landing (— with no landing).
+    ///   go: GO verdicts on the seat's changes.
+    ///   return: RETURN verdicts on the seat's changes.
+    ///   sent: messages the seat sent.
+    ///   recv: messages the seat received.
+    ///   goal%: the share of sent messages that name a goal.
+    ///   asks-no-goal: decision messages sent (`[messages] decision_kinds`) that name no goal.
+    ///   created: tracker items the seat created.
+    ///   wip: goals of a counted type the seat held claimed and open at the window's end.
+    ///   active-h: hours with session activity.
+    ///
+    /// Below the table: flow medians (change start to landing, to first verdict, land gate),
+    /// the tracker (created, closed, created/closed, open, unowned), the hub, and how well the joins held.
+    /// `?` marks a value the sources do not cover; the reason is listed beneath.
+    #[command(verbatim_doc_comment)]
     Scorecard {
         window: String,
         #[arg(long)]
@@ -46,7 +67,27 @@ pub enum Command {
     },
     /// One row per seat: goal, budget spent, landings, runs, verdict, flags.
     ///
-    /// Budget: the finite effort a goal's `## Budget` section allows (agent-hours, hours, days or runs); the board shows it as spent/allowed and flags a goal over it.
+    /// Columns (counts cover the last `[board] window_hours`, 24 by default):
+    ///   goal: the goal the seat's latest work cites, then +N for the others it holds.
+    ///   budget: effort spent since the claim / the effort its `## Budget` section allows (agent-hours, hours, days or runs).
+    ///   lands: the seat's landings on the trunk in the window.
+    ///   last: how long ago the seat last landed.
+    ///   runs: the seat's runner runs in the window.
+    ///   pass: the share of those runs that passed.
+    ///   since-land: runs since the seat's last landing (with none, since landings are first read).
+    ///   verdict: the last review verdict on the seat's changes, and its age.
+    ///   findings: comments on the lead goal since it was claimed.
+    ///   flags: what needs acting on, below.
+    ///
+    /// Flags:
+    ///   over budget on G: more effort spent on G than its budget allows.
+    ///   N goals in progress, WIP W: more claimed goals of a counted type (`[goal] types`) than the seat may hold.
+    ///   no landing in Nd: the lead goal has gone N days with no landing (not for hubs).
+    ///   last land refused: the seat's last land run after its last landing failed or was refused.
+    ///   N runs since last landing: runs piling up with nothing landed (not for hubs).
+    ///
+    /// `?` marks a value the sources do not cover; the reason is listed under the table.
+    #[command(verbatim_doc_comment)]
     Board {
         /// Only this seat's row.
         #[arg(long)]

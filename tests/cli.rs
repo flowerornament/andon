@@ -248,3 +248,46 @@ fn hook_check_reports_the_wiring_and_exits_1_naming_the_fix() {
     assert_eq!(none.status.code(), Some(1));
     assert!(stdout(&none).contains("refused config: no andon.toml"));
 }
+
+/// andon-e10: every column the board and scorecard print is defined, one
+/// line each, in its command's `--help`.
+#[test]
+fn every_column_is_defined_in_help() {
+    let help = |cmd: &str| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_andon"))
+            .args([cmd, "--help"])
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let defined = |text: &str, name: &str| {
+        text.lines()
+            .any(|l| l.trim_start().starts_with(&format!("{name}: ")))
+    };
+    let board = help("board");
+    for name in andon::render::board_header().iter().skip(1) {
+        assert!(
+            defined(&board, name),
+            "board --help does not define {name}:\n{board}"
+        );
+    }
+    for flag in [
+        "over budget",
+        "goals in progress",
+        "no landing in",
+        "last land refused",
+        "runs since last landing",
+    ] {
+        assert!(
+            board.contains(flag),
+            "board --help does not explain the flag {flag:?}"
+        );
+    }
+    let card = help("scorecard");
+    for name in andon::render::SCORECARD_HEADER.iter().skip(1) {
+        assert!(
+            defined(&card, name),
+            "scorecard --help does not define {name}:\n{card}"
+        );
+    }
+}

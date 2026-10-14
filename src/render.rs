@@ -135,6 +135,25 @@ fn card_row(name: &str, c: &SeatCard) -> Vec<String> {
     ]
 }
 
+/// The scorecard's columns; `scorecard --help` defines each.
+pub const SCORECARD_HEADER: &[&str] = &[
+    "seat",
+    "lands",
+    "runs",
+    "fail",
+    "no-reason",
+    "runs/land",
+    "go",
+    "return",
+    "sent",
+    "recv",
+    "goal%",
+    "asks-no-goal",
+    "created",
+    "wip",
+    "active-h",
+];
+
 /// The scorecard as text.
 #[must_use]
 pub fn scorecard(card: &Scorecard) -> String {
@@ -154,26 +173,10 @@ pub fn scorecard(card: &Scorecard) -> String {
         );
     }
     let mut rows = vec![
-        [
-            "seat",
-            "lands",
-            "runs",
-            "fail",
-            "no-reason",
-            "runs/land",
-            "go",
-            "return",
-            "sent",
-            "recv",
-            "goal%",
-            "asks-no-goal",
-            "created",
-            "wip",
-            "active-h",
-        ]
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect::<Vec<_>>(),
+        SCORECARD_HEADER
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>(),
     ];
     let mut idle = 0;
     for (seat, c) in &card.seats {
