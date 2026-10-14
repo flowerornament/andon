@@ -129,6 +129,7 @@ impl<'a> Index<'a> {
                         item.title = event.attr_str("title").map(str::to_owned);
                     }
                     item.budget = event.attr_str("budget").map(str::to_owned);
+                    item.item_type = event.attr_str("item_type").map(str::to_owned);
                 }
                 Kind::Claim => {
                     item.owner = event.seat.clone().or_else(|| event.actor.clone());
@@ -158,6 +159,22 @@ pub struct Item {
     pub closed_at: Option<Timestamp>,
     pub title: Option<String>,
     pub budget: Option<String>,
+    /// The tracker's type for it (feature, bug, task, epic…), when it says.
+    pub item_type: Option<String>,
+}
+
+impl Item {
+    /// Whether it counts toward a seat's WIP: claimed, open, and of a type
+    /// `[goal] types` names (an item of no stated type counts).
+    #[must_use]
+    pub fn in_progress(&self, config: &crate::config::Config) -> bool {
+        self.claimed
+            && !self.closed
+            && self
+                .item_type
+                .as_deref()
+                .is_none_or(|t| t.is_empty() || config.goal.types.iter().any(|x| x == t))
+    }
 }
 
 /// The median, rounded to two decimals; `None` for no values.

@@ -30,6 +30,9 @@ pub struct Scorecard {
     pub schema: u32,
     pub from: Timestamp,
     pub to: Timestamp,
+    /// The end asked for, when it lay after the capture instant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked_to: Option<Timestamp>,
     pub days: f64,
     pub seats: BTreeMap<String, SeatCard>,
     /// Every event in the window, attributed or not.
@@ -176,6 +179,7 @@ fn publish(raw: Raw, coverage: &Coverage, window: Window) -> Scorecard {
         schema: 2,
         from: window.from,
         to: window.to,
+        asked_to: window.asked_to,
         days: round2(window.length_days()),
         seats,
         total: card(raw.total, raw.wip_total, None),
@@ -373,7 +377,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
     let mut wip_total = 0;
     let mut wip_unattributed = 0;
     for item in state.values() {
-        if item.claimed && !item.closed {
+        if item.in_progress(config) {
             wip_total += 1;
             if item.owner.as_ref().is_none_or(|o| !seats.contains_key(o)) {
                 wip_unattributed += 1;
@@ -388,7 +392,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
         match &item.owner {
             None => tracker.unowned_at_end += 1,
             Some(owner) => {
-                if item.claimed
+                if item.in_progress(config)
                     && let Some(card) = seats.get_mut(owner)
                 {
                     card.wip_at_end += 1;

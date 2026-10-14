@@ -3,6 +3,7 @@
 //! sections; the owner is set by a claim, never by hand.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use regex::Regex;
 
@@ -66,6 +67,37 @@ pub fn candidates(pattern: &Regex, subject: &str, message: &str, config: &Config
         }
     }
     out
+}
+
+/// A goal's text with the sections config keeps in tracker fields
+/// (`[goal.fields]`) added, each where the description lacks it. A field
+/// value that begins with its own label (`Done when: ...`) loses it.
+#[must_use]
+pub fn with_fields(
+    description: &str,
+    record: &serde_json::Value,
+    fields: &BTreeMap<String, String>,
+) -> String {
+    let have = sections(description);
+    let mut text = description.to_owned();
+    for (name, field) in fields {
+        if section(&have, name).is_some() {
+            continue;
+        }
+        let Some(value) = record[field.as_str()]
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        let value = value
+            .strip_prefix(name.as_str())
+            .and_then(|v| v.strip_prefix(':'))
+            .map_or(value, str::trim);
+        let _ = write!(text, "\n\n## {name}\n\n{value}\n");
+    }
+    text
 }
 
 /// A description's sections, keyed by heading, lowercased. A section starts at

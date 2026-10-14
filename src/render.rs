@@ -146,6 +146,13 @@ pub fn scorecard(card: &Scorecard) -> String {
         short_time(card.to),
         card.days
     );
+    if card.asked_to.is_some() {
+        let _ = writeln!(
+            out,
+            "counted to {}; the window ends in the future\n",
+            short_time(card.to)
+        );
+    }
     let mut rows = vec![
         [
             "seat",
@@ -423,6 +430,16 @@ pub fn board(board: &Board) -> String {
         rows.push(board_row(row, board.asof));
     }
     out.push_str(&table(&rows));
+    // goals no row shows: claimed by an identity that is no seat
+    for u in board.unseated.get().into_iter().flatten() {
+        let _ = writeln!(
+            out,
+            "\n{} is claimed by '{}', which is not a seat; {}",
+            u.goal,
+            u.owner,
+            crate::check::identity_hint_any(&u.goal)
+        );
+    }
     let entries = row_reasons(board);
     if !entries.is_empty() {
         out.push('\n');

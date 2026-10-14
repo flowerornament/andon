@@ -57,6 +57,26 @@ pub fn claim_hint(config: &Config, id: &str) -> String {
     }
 }
 
+/// How a seat makes the tracker record it, not a shared identity.
+#[must_use]
+pub fn identity_hint(config: &Config, id: &str, seat: &str) -> String {
+    if config.adapters.github.is_some() {
+        format!(
+            "assign #{} to the account {seat} is known by: gh issue edit {} --add-assignee <login>",
+            id.trim_start_matches('#'),
+            id.trim_start_matches('#')
+        )
+    } else {
+        format!("set BEADS_ACTOR={seat} or bd update {id} --assignee {seat}")
+    }
+}
+
+/// [`identity_hint`] for no seat in particular (the board's note).
+#[must_use]
+pub fn identity_hint_any(id: &str) -> String {
+    format!("set BEADS_ACTOR=<seat> or bd update {id} --assignee <seat>")
+}
+
 /// A commit, as the check sees it.
 #[derive(Debug, Clone, Default)]
 pub struct Commit {
@@ -76,7 +96,7 @@ pub fn commit(commit: &Commit, ledger: &Ledger, config: &Config, now: Timestamp)
     let held = |seat: &str| -> Vec<&String> {
         items
             .iter()
-            .filter(|(_, i)| i.claimed && !i.closed && i.owner.as_deref() == Some(seat))
+            .filter(|(_, i)| i.in_progress(config) && i.owner.as_deref() == Some(seat))
             .map(|(id, _)| id)
             .collect()
     };
@@ -131,6 +151,14 @@ fn held_by(item: &Item, goal: &str, seat: &str, config: &Config) -> Option<Strin
     }
     match (&item.owner, item.claimed) {
         (Some(owner), true) if owner == seat => None,
+        // claimed by an identity that is no seat (a shared default user):
+        // "claim it" would loop, so name the identity fix instead
+        (Some(owner), true) if !config.seats.is_empty() && !config.seats.contains_key(owner) => {
+            Some(format!(
+                "{goal} is claimed by '{owner}', which is not a seat; {}",
+                identity_hint(config, goal, seat)
+            ))
+        }
         (Some(owner), true) => Some(format!(
             "{goal} is claimed by {owner}, not {seat}; cite a goal you hold"
         )),
@@ -306,6 +334,13 @@ mod tests {
                 item(Kind::Create, "2026-10-13T09:00:00Z", "andon-76c", None),
                 item(Kind::Create, "2026-10-13T09:00:00Z", "andon-old", None),
                 item(Kind::Close, "2026-10-13T09:30:00Z", "andon-old", None),
+                item(Kind::Create, "2026-10-13T09:00:00Z", "andon-sh1", None),
+                item(
+                    Kind::Claim,
+                    "2026-10-13T09:03:00Z",
+                    "andon-sh1",
+                    Some("Flower Ornament"),
+                ),
                 item(Kind::Create, "2026-10-13T09:00:00Z", "andon-1a1", None),
                 item(
                     Kind::Claim,
@@ -349,6 +384,47 @@ mod tests {
         assert_eq!(
             check("board: rows (andon-1a1)", Some("andon-1b"), "").line(),
             "refused: 7d1c241adb66 cites andon-1a1, but andon-1a1 is claimed by andon-1a, not andon-1b; cite a goal you hold"
+        );
+    }
+
+    #[test]
+    fn an_epic_held_does_not_count_toward_wip() {
+        // andon-1b holds andon-xa4 and, as its lane's owner, an epic: WIP 1
+        // is not exceeded, since only feature, bug and task count
+        let c = config("");
+        let mut events = ledger(&c).events().to_vec();
+        let mut epic = item(Kind::Create, "2026-10-13T08:00:00Z", "andon-ep1", None);
+        epic.set_attr("item_type", "epic");
+        events.push(epic);
+        events.push(item(
+            Kind::Claim,
+            "2026-10-13T08:01:00Z",
+            "andon-ep1",
+            Some("andon-1b"),
+        ));
+        let l = adapters::resolve(&c, events);
+        let commit = Commit {
+            id: "7d1c241adb66aaaa".into(),
+            title: "x (andon-xa4)".into(),
+            message: "x (andon-xa4)".into(),
+            seat: Some("andon-1b".into()),
+        };
+        assert!(
+            super::commit(&commit, &l, &c, at("2026-10-13T12:00:00Z"))
+                .line()
+                .starts_with("ok:"),
+            "{}",
+            super::commit(&commit, &l, &c, at("2026-10-13T12:00:00Z")).line()
+        );
+    }
+
+    #[test]
+    fn a_goal_claimed_by_no_seat_names_the_identity_fix() {
+        // a shared actor (bd's default user) claimed it: saying "claim it"
+        // would loop, since claiming again assigns the same actor
+        assert_eq!(
+            check("x (andon-sh1)", Some("andon-1b"), "").line(),
+            "refused: 7d1c241adb66 cites andon-sh1, but andon-sh1 is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=andon-1b or bd update andon-sh1 --assignee andon-1b"
         );
     }
 

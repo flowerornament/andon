@@ -58,6 +58,9 @@ pub fn day_start(date: Date) -> Result<Timestamp> {
 pub struct Window {
     pub from: Timestamp,
     pub to: Timestamp,
+    /// The end asked for, when it lay after `now`: the window then ends at
+    /// `now`, since nothing after it has been read.
+    pub asked_to: Option<Timestamp>,
 }
 
 impl Window {
@@ -87,9 +90,16 @@ impl Window {
         if end <= start {
             bail!("empty window {text:?}: its end is not after its start");
         }
+        // a window that ends in the future counts up to now, and says so
+        let (end, asked_to) = if end > now && start < now {
+            (now, Some(end))
+        } else {
+            (end, None)
+        };
         Ok(Self {
             from: start,
             to: end,
+            asked_to,
         })
     }
 

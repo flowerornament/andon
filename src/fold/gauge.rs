@@ -226,6 +226,8 @@ pub const REGISTRY: &[Spec] = &[
     spec("joins.runs", &["run"], Span::Window),
     spec("joins.runs_attributed", &["run"], Span::Window),
     spec("runs_by_repo", &["run"], Span::Window),
+    // the board, beyond its rows
+    spec("board.unseated", TRACKER, Span::State),
     // a board row
     spec("row.goals", TRACKER, Span::State),
     spec("row.landings", &["land"], Span::Window),

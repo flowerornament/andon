@@ -133,6 +133,16 @@ pub struct GoalRules {
     /// Whether `check goal` requires a pool section naming a configured pool.
     #[serde(default)]
     pub require_pool: bool,
+    /// Sections kept in a tracker field rather than the description:
+    /// section name to field (`"Done when" = "acceptance_criteria"`). The bd
+    /// and GitHub adapters read the field as that section where the
+    /// description has none.
+    #[serde(default)]
+    pub fields: BTreeMap<String, String>,
+    /// Tracker item types that count toward WIP; others (an epic a lane's
+    /// owner holds) do not. An item of no stated type counts.
+    #[serde(default = "default_types")]
+    pub types: Vec<String>,
 }
 
 impl Default for GoalRules {
@@ -144,12 +154,17 @@ impl Default for GoalRules {
             checkable: default_checkable(),
             wip_per_seat: default_wip(),
             require_pool: false,
+            fields: BTreeMap::new(),
+            types: default_types(),
         }
     }
 }
 
 fn default_sections() -> Vec<String> {
     vec!["Why".into(), "Done when".into(), "Budget".into()]
+}
+fn default_types() -> Vec<String> {
+    vec!["feature".into(), "bug".into(), "task".into()]
 }
 fn default_done_when() -> String {
     "Done when".into()
@@ -684,6 +699,10 @@ name = "my-project"
 # A goal id as it appears in commit subjects and messages.
 goal_pattern = '\bmy-project-[a-z0-9]{3,6}\b'
 
+# Identity first: every fact joins to a seat by the name its tool recorded.
+# Each agent must act under its seat's name: with bd, set BEADS_ACTOR=<seat>
+# in the seat's environment, or bd records your git user, which is no seat.
+#
 # One table per seat. aliases: exact labels (trailer values, tracker actors,
 # message labels). prefixes: workspace names that belong to the seat.
 [seats.my-project-1a]

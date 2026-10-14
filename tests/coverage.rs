@@ -379,7 +379,9 @@ fn an_unreadable_transcript_is_a_gap_not_zero_hours() {
 /// The registered gauge a JSON path is an instance of, and whether it is a
 /// single seat's.
 fn spec_of(board: bool, path: &str) -> Option<(&'static Spec, bool)> {
-    let (name, seat) = if board {
+    let (name, seat) = if board && !path.starts_with("seats.") {
+        (format!("board.{path}"), false)
+    } else if board {
         let rest = path.strip_prefix("seats.")?.split_once('.')?.1;
         let name = if rest.starts_with("goals.") && rest.split('.').nth(2) == Some("used") {
             "row.goals.used".to_owned()
@@ -555,6 +557,7 @@ const METADATA: &[(bool, &str)] = &[
     (false, "schema"),
     (false, "from"),
     (false, "to"),
+    (false, "asked_to"),
     (false, "days"),
     (true, "schema"),
     (true, "asof"),
@@ -688,4 +691,32 @@ fn with_nothing_covered_every_text_cell_is_unknown() {
         assert!(data.iter().all(|c| c == "?"), "{seat}: {data:?}");
         assert!(flags.is_empty(), "{seat}: {flags}");
     }
+}
+
+/// Item 4 (andon-e10): a window that ends after the capture instant counts
+/// up to it and says so, rather than turning every gauge unknown.
+#[test]
+fn a_window_ending_in_the_future_counts_to_the_capture() {
+    let window =
+        Window::parse("2026-10-13..2026-10-14", at(NOON)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(window.to, at(NOON));
+    // sources read to the capture instant, as real adapters do
+    let bounded: Vec<Event> = ledger(None)
+        .events()
+        .iter()
+        .cloned()
+        .map(|mut e| {
+            if e.kind == Kind::Coverage {
+                e.t_end = Some(at(NOON));
+            }
+            e
+        })
+        .collect();
+    let c = scorecard(&adapters::resolve(&config(), bounded), &config(), window);
+    assert_eq!(c.seats["x-1a"].landings, 1);
+    let text = andon::render::scorecard(&c);
+    assert!(
+        text.contains("counted to 2026-10-13 23:00; the window ends in the future"),
+        "{text}"
+    );
 }

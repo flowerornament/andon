@@ -460,7 +460,9 @@ fn check(
     Ok(match what {
         CheckCommand::Commit { rev, seat } => {
             let mut commit = match (&config.adapters.jj, &config.adapters.git) {
-                (Some(jc), _) => adapters::jj::describe(config, jc, rev)?,
+                (Some(jc), _) => {
+                    adapters::jj::describe(config, jc, rev, &std::env::current_dir()?)?
+                }
                 (None, Some(gc)) => adapters::git::describe(config, gc, rev)?,
                 (None, None) => {
                     return Err(anyhow!(

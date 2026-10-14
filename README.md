@@ -49,7 +49,7 @@ Three contracts make it project-independent:
 
 ## Surfaces
 
-- `andon board [--seat S]` — goal, effort used of budget, landings, runs and pass rate, last verdict, open findings, flags (past budget, no landing in N days, last land refused).
+- `andon board [--seat S]` — goal, budget spent of allowed, landings, runs and pass rate, last verdict, findings on the lead goal since its claim, flags (over budget, more goals than WIP allows, no landing in N days, last land refused; a hub in `[messages] hubs` gets no landing flags). Only `[goal] types` (default feature, bug, task) count toward WIP. A goal claimed by an identity that is no seat is named beneath the table.
 - `andon scorecard <day>` — the four gauges per seat.
 - `andon asof <date>` — the board as it stood, replayed from the ledger.
 - `andon hook` — reads the harness hook JSON on stdin, prints the seat's row. Claude Code and Codex.
@@ -66,6 +66,13 @@ Three milestones, from the spec:
 3. **Generalize.** git and GitHub adapters. Done when a GitHub-native repository shows a board with no code change in andon.
 
 ## Use
+
+**First, identity.** andon joins every fact to a seat by the names the
+tools record, so each agent must act under its own seat's name. A tracker
+claim made as a shared default user (bd assigns your git user unless
+`BEADS_ACTOR` is set) belongs to no seat, and andon says so. Set each
+seat's identity in its environment, for example `BEADS_ACTOR=my-project-1a`,
+and list the labels a seat is known by under `[seats]`.
 
 ```sh
 andon init > andon.toml          # a starter config: seats, goal rules, adapters
@@ -91,7 +98,14 @@ trunk = "main"
 repo = "owner/name"
 ```
 
-Exit codes: 0 rendered or passed; 1 a check refused; 2 andon could not decide (the line says what to repair). `andon hook` reads a Claude Code or Codex hook payload on stdin and never fails the session.
+A goal section kept in a tracker field rather than the description is mapped in config, for example bd's acceptance field:
+
+```toml
+[goal.fields]
+"Done when" = "acceptance_criteria"
+```
+
+A scorecard window that ends after now counts up to now and says so. Exit codes: 0 rendered or passed; 1 a check refused; 2 andon could not decide (the line says what to repair). `andon hook` reads a Claude Code or Codex hook payload on stdin and never fails the session.
 
 ## Adapters
 

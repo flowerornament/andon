@@ -28,6 +28,16 @@ pub struct Board {
     /// Counts in each row cover this many hours before `asof`.
     pub window_hours: f64,
     pub seats: Vec<Row>,
+    /// Open goals claimed by an identity that is no configured seat (a
+    /// shared default user): no row shows them, so the board names them.
+    pub unseated: Gauge<Vec<Unseated>>,
+}
+
+/// A goal claimed by no seat, and by whom.
+#[derive(Debug, Clone, Serialize)]
+pub struct Unseated {
+    pub goal: String,
+    pub owner: String,
 }
 
 /// One seat. Every gauge is a [`Gauge`]: known, or unknown with the reason
@@ -50,7 +60,7 @@ pub struct Row {
     #[serde(skip)]
     pub runs_from: Option<Timestamp>,
     pub last_verdict: Gauge<Option<Verdict>>,
-    /// Comments on the seat's goals since they were claimed.
+    /// Comments on the seat's lead goal since it was claimed.
     pub findings: Gauge<usize>,
     /// Flags read only known gauges: a flag never speaks where the ledger
     /// could not look.
@@ -69,6 +79,9 @@ pub struct Goal {
     pub unit: Option<String>,
     /// Effort spent since the claim, in the budget's unit.
     pub used: Gauge<f64>,
+    /// Whether it counts toward WIP (`[goal] types`; an epic does not).
+    #[serde(skip)]
+    pub counts: bool,
     /// The seat's latest commit or landing that cites this goal, as read:
     /// only the key that puts the goal being worked first, not a gauge, so
     /// not in the output.
@@ -152,10 +165,26 @@ pub fn board(ledger: &Ledger, config: &Config, asof: Timestamp) -> Board {
             )
         })
         .collect();
+    let unseated: Vec<Unseated> = if config.seats.is_empty() {
+        Vec::new()
+    } else {
+        items
+            .iter()
+            .filter(|(_, i)| i.claimed && !i.closed)
+            .filter_map(|(goal, i)| {
+                let owner = i.owner.as_deref()?;
+                (!config.seats.contains_key(owner)).then(|| Unseated {
+                    goal: goal.clone(),
+                    owner: owner.to_owned(),
+                })
+            })
+            .collect()
+    };
     Board {
         schema: 2,
         asof,
         window_hours,
+        unseated: g.gauge("board.unseated", None, None, unseated),
         seats: rows,
     }
 }
@@ -173,9 +202,9 @@ fn row(
     landings_from: Option<Timestamp>,
 ) -> Row {
     let s = Some(seat.as_str());
-    // findings count from the first claim; with no goal held there is none
+    // findings count from the lead goal's claim; with no goal held there is none
     // to find, which is known where comments are read at the instant
-    let first_claim = held.iter().filter_map(|x| x.claimed_at).min();
+    let first_claim = held.first().and_then(|x| x.claimed_at);
     let goals = g.gauge("row.goals", s, None, held);
     let findings = g.over(
         &goals,
@@ -309,6 +338,7 @@ fn goals(
                 title: item.title.clone(),
                 claimed_at: item.claimed_at,
                 budget: item.budget.clone(),
+                counts: item.in_progress(config),
                 amount,
                 unit,
                 used,
@@ -397,15 +427,18 @@ pub fn parse_budget(text: &str) -> Option<(f64, String)> {
 }
 
 /// Comments on the seat's goals since each was claimed.
+/// Comments on the lead goal (the one the seat's work cites) since it was
+/// claimed: what the seat has been told about the work in hand, not every
+/// comment on everything it holds.
 fn findings(ledger: &Ledger, goals: &[Goal]) -> usize {
+    let Some(lead) = goals.first() else { return 0 };
     ledger
         .events()
         .iter()
         .filter(|e| e.kind == Kind::Other("other:comment".to_owned()))
         .filter(|e| {
-            goals.iter().any(|g| {
-                e.subject.as_deref() == Some(g.id.as_str()) && g.claimed_at.is_none_or(|c| e.t >= c)
-            })
+            e.subject.as_deref() == Some(lead.id.as_str())
+                && lead.claimed_at.is_none_or(|c| e.t >= c)
         })
         .count()
 }
@@ -422,8 +455,9 @@ fn flags(
     let asof = g.to;
     let wip = config.wip_for(&row.seat);
     let held = row.goals.get().map_or(&[][..], Vec::as_slice);
-    if held.len() > wip {
-        flags.push(format!("{} goals in progress, WIP {wip}", held.len()));
+    let counted = held.iter().filter(|g| g.counts).count();
+    if counted > wip {
+        flags.push(format!("{counted} goals in progress, WIP {wip}"));
     }
     for goal in held {
         if let (Some(amount), Some(used)) = (goal.amount, goal.used.get())
@@ -433,7 +467,10 @@ fn flags(
         }
     }
     let last_land = row.last_land.get().copied().flatten();
-    if let Some(goal) = held.first() {
+    // a hub (`[messages] hubs`) coordinates and does not land: quiet is its
+    // role, not a stall, so the landing flags do not apply to it
+    let hub = config.messages.hubs.contains(&row.seat);
+    if let Some(goal) = held.first().filter(|_| !hub) {
         // quiet since the later of the last landing and the claim, and never
         // from before landings are covered; absence speaks only where
         // landings are covered from then to now
@@ -461,6 +498,7 @@ fn flags(
     }
     // the count speaks only where it is known (C2)
     if let Some(n) = row.runs_since_land.get()
+        && !hub
         && *n >= config.board.runs_without_land
     {
         if last_land.is_some() {
@@ -601,6 +639,82 @@ mod tests {
                 .is_some_and(|w| w.starts_with("landings are read from 2026-10-09")),
             "{:?}",
             row.landings
+        );
+    }
+
+    #[test]
+    fn findings_are_the_lead_goals_since_its_claim() {
+        let comment =
+            |t: &str, goal: &str| event(t, Kind::Other("other:comment".into()), "x-1b", Some(goal));
+        let events = vec![
+            comment("2026-10-13T07:00:00Z", "x-old"), // before the claim
+            event("2026-10-13T08:00:00Z", Kind::Claim, "x-1a", Some("x-old")),
+            comment("2026-10-13T08:30:00Z", "x-old"),
+            event("2026-10-13T09:00:00Z", Kind::Commit, "x-1a", Some("x-old")),
+            event("2026-10-13T10:00:00Z", Kind::Claim, "x-1a", Some("x-new")),
+            comment("2026-10-13T10:30:00Z", "x-new"), // not the lead goal
+            covered(
+                "1970-01-01T00:00:00Z",
+                &["create", "claim", "close", "other:comment"],
+            ),
+        ];
+        let ledger = adapters::resolve(&config(), events);
+        let b = board(&ledger, &config(), at("2026-10-13T12:00:00Z"));
+        assert_eq!(b.seats[0].findings, 1);
+    }
+
+    #[test]
+    fn a_hub_gets_no_landing_flags() {
+        // a coordinator holds a goal and does not land: its role, not a stall
+        let config = Config::parse(
+            "[seats.x-1a]\n[seats.x-1b]\n[board]\nruns_without_land = 2\n[messages]\nhubs = [\"x-1b\"]\n",
+            Path::new("/"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let events = vec![
+            event("2026-10-08T00:00:00Z", Kind::Claim, "x-1b", Some("x-goal")),
+            event("2026-10-10T00:00:00Z", Kind::Run, "x-1b", None),
+            event("2026-10-11T00:00:00Z", Kind::Run, "x-1b", None),
+            covered("2026-10-01T00:00:00Z", &["land", "run"]),
+            covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
+        ];
+        let ledger = adapters::resolve(&config, events);
+        let b = board(&ledger, &config, at("2026-10-12T00:00:00Z"));
+        let row = b
+            .seats
+            .iter()
+            .find(|r| r.seat == "x-1b")
+            .unwrap_or_else(|| panic!("row"));
+        assert!(
+            row.flags.iter().all(|f| !f.contains("landing")),
+            "{:?}",
+            row.flags
+        );
+    }
+
+    #[test]
+    fn a_goal_claimed_by_no_seat_is_on_the_board_with_the_fix() {
+        let events = vec![
+            event(
+                "2026-10-13T08:00:00Z",
+                Kind::Claim,
+                "Flower Ornament",
+                Some("x-shared"),
+            ),
+            covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
+        ];
+        let ledger = adapters::resolve(&config(), events);
+        let b = board(&ledger, &config(), at("2026-10-13T12:00:00Z"));
+        let unseated = b.unseated.get().cloned().unwrap_or_default();
+        assert_eq!(unseated.len(), 1);
+        assert_eq!(
+            (unseated[0].goal.as_str(), unseated[0].owner.as_str()),
+            ("x-shared", "Flower Ornament")
+        );
+        let text = crate::render::board(&b);
+        assert!(
+            text.contains("x-shared is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=<seat> or bd update x-shared --assignee <seat>"),
+            "{text}"
         );
     }
 

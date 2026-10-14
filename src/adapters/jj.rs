@@ -122,8 +122,17 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
 ///
 /// # Errors
 /// When jj cannot resolve the revision to exactly one commit.
-pub fn describe(config: &Config, jc: &JjConfig, rev: &str) -> Result<crate::check::Commit> {
-    let repo = config.path(&jc.repo);
+pub fn describe(
+    config: &Config,
+    jc: &JjConfig,
+    rev: &str,
+    cwd: &Path,
+) -> Result<crate::check::Commit> {
+    // a revision the caller names (`@` above all) is the caller's: resolve it
+    // in the caller's workspace when that is a workspace of the configured
+    // repository, never in the configured checkout's own working copy
+    let configured = config.path(&jc.repo);
+    let repo = caller_workspace(&configured, cwd).unwrap_or(configured);
     let op = operation(&repo)?;
     let commits = log(
         &Repo {
@@ -142,6 +151,27 @@ pub fn describe(config: &Config, jc: &JjConfig, rev: &str) -> Result<crate::chec
         message: commit.description.clone(),
         seat: parsed.seat.or(parsed.workspace),
     })
+}
+
+/// The jj workspace `cwd` is in, when it shares `configured`'s store.
+fn caller_workspace(configured: &Path, cwd: &Path) -> Option<std::path::PathBuf> {
+    let root = cwd.ancestors().find(|d| d.join(".jj").is_dir())?;
+    let same = store(root)
+        .zip(configured.ancestors().find_map(store))
+        .is_some_and(|(a, b)| a == b);
+    same.then(|| root.to_path_buf())
+}
+
+/// A workspace's repository store: `.jj/repo` itself, or the store a
+/// secondary workspace's `.jj/repo` file names (relative to its `.jj`).
+fn store(root: &Path) -> Option<std::path::PathBuf> {
+    let jj = root.join(".jj");
+    let repo = jj.join("repo");
+    if repo.is_dir() {
+        return repo.canonicalize().ok();
+    }
+    let target = std::fs::read_to_string(&repo).ok()?;
+    jj.join(target.trim()).canonicalize().ok()
 }
 
 /// A repository read at one operation, so every call sees one snapshot.

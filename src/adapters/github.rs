@@ -54,6 +54,7 @@ pub fn collect(config: &Config, gc: &GithubConfig) -> Result<Vec<Event>> {
         gc,
         &format!("github {}", gc.repo),
         config.capture(),
+        &config.goal.fields,
     )
 }
 
@@ -136,6 +137,7 @@ pub fn events(
     gc: &GithubConfig,
     source: &str,
     now: jiff::Timestamp,
+    fields: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<Event>> {
     let who = |login: Option<&str>| -> Option<String> {
         login.map(|l| gc.accounts.get(l).cloned().unwrap_or_else(|| l.to_owned()))
@@ -157,7 +159,7 @@ pub fn events(
     }
     let mut out = Vec::new();
     for issue in &s.issues {
-        out.extend(issue_events(issue, gc, &assigned, &who, source)?);
+        out.extend(issue_events(issue, gc, &assigned, &who, source, fields)?);
     }
     for pr in &s.prs {
         out.extend(pr_events(pr, &who, source)?);
@@ -210,6 +212,7 @@ fn issue_events(
     assigned: &HashMap<(i64, String), String>,
     who: &dyn Fn(Option<&str>) -> Option<String>,
     source: &str,
+    fields: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<Event>> {
     let mut out = Vec::new();
     let Some(n) = issue["number"].as_i64() else {
@@ -239,8 +242,8 @@ fn issue_events(
     let mut create = item(created, Kind::Create)?;
     create.actor = who(issue["author"]["login"].as_str());
     create.set_attr("title", text(issue, "title").unwrap_or_default().to_owned());
-    let body = text(issue, "body").unwrap_or_default();
-    let sections = crate::goal::sections(body);
+    let body = crate::goal::with_fields(text(issue, "body").unwrap_or_default(), issue, fields);
+    let sections = crate::goal::sections(&body);
     if let Some(budget) = crate::goal::section(&sections, "budget") {
         create.set_attr("budget", budget.to_owned());
     }
@@ -429,8 +432,14 @@ mod tests {
 
     #[test]
     fn issues_become_goals_claimed_by_their_assignee() {
-        let events = events(&snapshot(), &gc(), "github", jiff::Timestamp::now())
-            .unwrap_or_else(|e| panic!("{e}"));
+        let events = events(
+            &snapshot(),
+            &gc(),
+            "github",
+            jiff::Timestamp::now(),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         // and each list states its coverage
         let covered = events.iter().filter(|e| e.kind == Kind::Coverage).count();
         assert_eq!(covered, 3);
@@ -464,8 +473,14 @@ mod tests {
 
     #[test]
     fn reviews_are_verdicts_on_the_pull_request() {
-        let events = events(&snapshot(), &gc(), "github", jiff::Timestamp::now())
-            .unwrap_or_else(|e| panic!("{e}"));
+        let events = events(
+            &snapshot(),
+            &gc(),
+            "github",
+            jiff::Timestamp::now(),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         let verdicts: Vec<&Event> = events.iter().filter(|e| e.kind == Kind::Verdict).collect();
         assert_eq!(verdicts.len(), 2, "a comment-only review is not a verdict");
         assert_eq!(verdicts[0].outcome, Some(Outcome::Return));
@@ -477,8 +492,14 @@ mod tests {
 
     #[test]
     fn a_failed_run_keeps_its_reason_and_finds_its_seat_by_branch() {
-        let events = events(&snapshot(), &gc(), "github", jiff::Timestamp::now())
-            .unwrap_or_else(|e| panic!("{e}"));
+        let events = events(
+            &snapshot(),
+            &gc(),
+            "github",
+            jiff::Timestamp::now(),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         let run = events
             .iter()
             .find(|e| e.kind == Kind::Run)

@@ -115,8 +115,12 @@ pub fn issue_events(
         // an assignee owns the goal even before starting it (it is not a
         // claim: a claim is a start); the export says who it is now
         e.set_attr("assignee", text(issue, "assignee").unwrap_or_default());
-        let description = text(issue, "description").unwrap_or_default();
-        let sections = goal::sections(description);
+        let description = goal::with_fields(
+            text(issue, "description").unwrap_or_default(),
+            issue,
+            &config.goal.fields,
+        );
+        let sections = goal::sections(&description);
         if let Some(budget) = goal::section(&sections, &config.goal.budget) {
             e.set_attr("budget", budget.to_owned());
         }
@@ -175,7 +179,9 @@ pub fn description(config: &Config, bc: &BdConfig, id: &str) -> Result<Option<St
     };
     let v: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
     let issue = v.as_array().and_then(|a| a.first()).unwrap_or(&v);
-    Ok(issue["description"].as_str().map(str::to_owned))
+    Ok(issue["description"]
+        .as_str()
+        .map(|d| goal::with_fields(d, issue, &config.goal.fields)))
 }
 
 fn comment_event(

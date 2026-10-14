@@ -4,6 +4,23 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- From the first adopter's use of 0.1.0:
+  - `check commit @` resolves a revision in the caller's jj workspace when
+    it is a workspace of the configured repository, not in the configured
+    checkout's working copy.
+  - `[goal.fields]` maps a goal section to a tracker field (bd's
+    `acceptance_criteria`, a GitHub issue field), read where the
+    description lacks the section.
+  - A goal claimed by an identity that is no seat (bd's default user) is
+    named, with the fix: set `BEADS_ACTOR=<seat>` or reassign it. `check
+    commit` says so instead of "claim it", and the board lists such goals.
+    `andon init` and the README lead with seat identity.
+  - A scorecard window that ends after the capture instant counts up to it
+    and says so.
+  - `[goal] types` (default feature, bug, task) decides what counts toward
+    WIP; an epic does not.
+  - Hubs (`[messages] hubs`) get no landing flags.
+  - Findings count comments on the seat's lead goal since its claim.
 - A goal's effort limit is its **budget**, everywhere, with no alias: the
   required `## Budget` section, the board's `budget` column, the flag
   `over budget on <goal>`, and `board --help`, which defines it. Breaking
