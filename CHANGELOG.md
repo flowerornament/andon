@@ -4,6 +4,10 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- The git adapter refuses a configured path that is not the top level of
+  its own git repository, rather than answering for an enclosing one, and
+  an inherited `GIT_DIR` (or work tree, index, object store) no longer
+  redirects a read.
 - From the first adopter's use of 0.1.0:
   - `check commit @` resolves a revision in the caller's jj workspace when
     it is a workspace of the configured repository, not in the configured

@@ -200,10 +200,29 @@ pub fn run_tool(tool: &str, args: &[&str], fix: &str) -> Result<String> {
 /// # Errors
 /// When the tool is not on PATH or exits non-zero.
 pub fn run_tool_in(dir: &std::path::Path, tool: &str, args: &[&str], fix: &str) -> Result<String> {
-    let output = std::process::Command::new(tool)
+    let mut command = std::process::Command::new(tool);
+    command
         .args(args)
         .current_dir(dir)
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+    if tool == "git" {
+        // a read answers for the path it names: an inherited GIT_DIR (or
+        // work tree, index, object store) must not redirect it, and a read
+        // takes no optional lock
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+        ] {
+            command.env_remove(var);
+        }
+        command.env("GIT_OPTIONAL_LOCKS", "0");
+    }
+    let output = command
         .output()
         .map_err(|e| anyhow::anyhow!("cannot run {tool} ({e}); {fix}"))?;
     if !output.status.success() {

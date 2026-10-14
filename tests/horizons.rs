@@ -513,3 +513,93 @@ fn jj_reads_a_change_committed_before_since_and_landed_after() {
         vec!["2026-10-09T00:02:00Z"]
     );
 }
+
+fn git_in(dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "x")
+        .env("GIT_AUTHOR_EMAIL", "x@example.com")
+        .env("GIT_COMMITTER_NAME", "x")
+        .env("GIT_COMMITTER_EMAIL", "x@example.com")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// andon-gjn (from the andon-76c census): git never answers for an
+/// enclosing repository. A configured path that is not a git top level (a
+/// jj-only workspace inside a home directory that has a `.git`) is refused,
+/// and an inherited `GIT_DIR` cannot redirect the read.
+#[test]
+fn git_never_answers_for_a_parent_repository() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let outer = dir.path();
+    if !git_in(outer, &["init", "-q", "-b", "main"]) {
+        eprintln!("skipped: git is not available here");
+        return;
+    }
+    assert!(git_in(
+        outer,
+        &["commit", "-q", "--allow-empty", "-m", "the parent's commit"]
+    ));
+    let inner = outer.join("desk");
+    std::fs::create_dir_all(&inner).unwrap_or_else(|e| panic!("{e}"));
+    write(
+        &outer.join("andon.toml"),
+        "[adapters.git]\nrepo = \"desk\"\ntrunk = \"main\"\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_andon"))
+        .args(["--config", "andon.toml", "ledger"])
+        .current_dir(outer)
+        .output()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let said =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !said.contains("the parent's commit"),
+        "read the parent: {said}"
+    );
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    assert!(
+        said.contains("not the top level of a git repository"),
+        "{said}"
+    );
+
+    // a real repository, read with GIT_DIR pointing at another
+    let repo = outer.join("repo");
+    std::fs::create_dir_all(&repo).unwrap_or_else(|e| panic!("{e}"));
+    assert!(git_in(&repo, &["init", "-q", "-b", "main"]));
+    assert!(git_in(
+        &repo,
+        &["commit", "-q", "--allow-empty", "-m", "mine"]
+    ));
+    write(
+        &outer.join("andon.toml"),
+        "[adapters.git]\nrepo = \"repo\"\ntrunk = \"main\"\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_andon"))
+        .args(["--config", "andon.toml", "ledger"])
+        .current_dir(outer)
+        .env("GIT_DIR", outer.join(".git"))
+        .output()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let said = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        landings_of(&said) == 1 && !said.contains("the parent's commit"),
+        "{said}"
+    );
+}
+
+fn landings_of(ledger: &str) -> usize {
+    ledger
+        .lines()
+        .filter(|l| l.contains("\"kind\":\"land\""))
+        .count()
+}

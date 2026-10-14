@@ -37,12 +37,43 @@ pub struct GitCommit {
 
 const FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%cI%x1f%B%x1e";
 
+/// The configured path must be the top level of its own git repository.
+/// git searches upward, so a path without its own `.git` (a jj-only
+/// workspace under a home directory that has one) would otherwise be
+/// answered for by an enclosing repository, silently.
+fn top_level(dir: &std::path::Path) -> Result<()> {
+    let fix = "point [adapters.git] repo at the repository's root";
+    let shown = dir.display();
+    let out = run_tool(
+        "git",
+        &["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"],
+        "install git, or remove [adapters.git]",
+    )
+    .map_err(|e| {
+        anyhow::anyhow!("{shown} is not the top level of a git repository ({e}); {fix}")
+    })?;
+    let top = std::path::Path::new(out.trim());
+    let same = top
+        .canonicalize()
+        .ok()
+        .zip(dir.canonicalize().ok())
+        .is_some_and(|(a, b)| a == b);
+    if !same {
+        anyhow::bail!(
+            "{shown} is not the top level of a git repository (git answers for {}); {fix}",
+            top.display()
+        );
+    }
+    Ok(())
+}
+
 /// Read the repository.
 ///
 /// # Errors
 /// When git cannot run or a timestamp cannot be parsed.
 pub fn collect(config: &Config, gc: &GitConfig) -> Result<Vec<Event>> {
     let dir = config.path(&gc.repo);
+    top_level(&dir)?;
     let dir = dir.to_string_lossy();
     let mut args = vec!["-C", &dir, "log", FORMAT];
     // a UTC instant before `since`: git's approxidate reads a bare date in
@@ -85,6 +116,7 @@ pub fn collect(config: &Config, gc: &GitConfig) -> Result<Vec<Event>> {
 /// When git cannot resolve the revision.
 pub fn describe(config: &Config, gc: &GitConfig, rev: &str) -> Result<crate::check::Commit> {
     let dir = config.path(&gc.repo);
+    top_level(&dir)?;
     let dir = dir.to_string_lossy();
     let out = run_tool(
         "git",
