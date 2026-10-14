@@ -12,7 +12,7 @@ aliases = ["default"]
 [seats.andon-1b]
 
 [goal]
-sections = ["Why", "Done when", "Appetite"]
+sections = ["Why", "Done when", "Budget"]
 wip_per_seat = 1
 
 [messages]

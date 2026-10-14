@@ -117,9 +117,9 @@ pub struct GoalRules {
     /// Which section holds the done-when; it must name a check that can fail.
     #[serde(default = "default_done_when")]
     pub done_when: String,
-    /// Which section holds the appetite; it must be finite.
-    #[serde(default = "default_appetite")]
-    pub appetite: String,
+    /// Which section holds the budget; it must be finite.
+    #[serde(default = "default_budget")]
+    pub budget: String,
     /// Stems of check outcomes and limits. A done-when that names none of
     /// these (endings matched: "pass" covers "passing"), no command in
     /// backticks and no number (`-0.5`, `1e-6`, `95%`) draws a warning from
@@ -140,7 +140,7 @@ impl Default for GoalRules {
         Self {
             sections: default_sections(),
             done_when: default_done_when(),
-            appetite: default_appetite(),
+            budget: default_budget(),
             checkable: default_checkable(),
             wip_per_seat: default_wip(),
             require_pool: false,
@@ -149,13 +149,13 @@ impl Default for GoalRules {
 }
 
 fn default_sections() -> Vec<String> {
-    vec!["Why".into(), "Done when".into(), "Appetite".into()]
+    vec!["Why".into(), "Done when".into(), "Budget".into()]
 }
 fn default_done_when() -> String {
     "Done when".into()
 }
-fn default_appetite() -> String {
-    "Appetite".into()
+fn default_budget() -> String {
+    "Budget".into()
 }
 fn default_checkable() -> Vec<String> {
     // stems (endings are matched: "pass" covers passes, passed, passing) and
@@ -258,10 +258,10 @@ pub struct BoardRules {
     /// Flag a seat with no landing for this many days while it holds a goal.
     #[serde(default = "default_stale_days")]
     pub no_land_days: f64,
-    /// How an appetite of `N agent-hours` is measured: `agent-hours` counts
+    /// How a budget of `N agent-hours` is measured: `agent-hours` counts
     /// session activity, `wall-clock` counts hours since the claim.
-    #[serde(default = "default_appetite_unit")]
-    pub appetite_unit: String,
+    #[serde(default = "default_budget_unit")]
+    pub budget_unit: String,
     /// Counts in a row cover this many hours before the board's instant.
     #[serde(default = "default_window_hours")]
     pub window_hours: f64,
@@ -274,7 +274,7 @@ impl Default for BoardRules {
     fn default() -> Self {
         Self {
             no_land_days: default_stale_days(),
-            appetite_unit: default_appetite_unit(),
+            budget_unit: default_budget_unit(),
             window_hours: default_window_hours(),
             runs_without_land: default_runs_without_land(),
         }
@@ -291,7 +291,7 @@ const fn default_runs_without_land() -> usize {
 const fn default_stale_days() -> f64 {
     1.0
 }
-fn default_appetite_unit() -> String {
+fn default_budget_unit() -> String {
     "agent-hours".into()
 }
 
@@ -691,7 +691,7 @@ aliases = ["my-project-1a"]
 prefixes = ["my-project-1a-"]
 
 [goal]
-sections = ["Why", "Done when", "Appetite"]
+sections = ["Why", "Done when", "Budget"]
 wip_per_seat = 1
 
 [messages]

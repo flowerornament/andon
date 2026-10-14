@@ -39,13 +39,13 @@ The unit of work is a **goal**, not a task.
 |---|---|---|
 | why | the obligation or outcome it serves | present |
 | done-when | a check that can fail | present; not "improve" |
-| appetite | the budget: wall-clock, agent effort, or runs | present, finite |
+| budget | the budget: wall-clock, agent effort, or runs | present, finite |
 | pool | the area whose seats may claim it | names a configured pool |
 | owner | the seat that claimed it | set by claim, never by hand |
 
 Three things with different lifetimes must not share one type: goals (live until done-when holds), plans (the how; live with the agent's session), findings (noticed; live until the goal closes, then kept or dropped by its owner). Giving them one type and one lifecycle is what makes m > 1. andon validates goals; plans and findings are never ledger items.
 
-On appetite exhaustion the owner lands what holds, narrows the goal within its why, or parks it with a finding. andon flags; the project's rules decide.
+On budget exhaustion the owner lands what holds, narrows the goal within its why, or parks it with a finding. andon flags; the project's rules decide.
 
 ## 4. The event ledger
 
@@ -99,10 +99,10 @@ Seat identity is the one join every adapter needs. A project declares how a seat
 
 ## 6. Surfaces
 
-- `board [--seat S] [--json]`: per seat: goal, appetite used, landings (count, last), runs (count, pass rate), last verdict, open findings, flags.
+- `board [--seat S] [--json]`: per seat: goal, budget used, landings (count, last), runs (count, pass rate), last verdict, open findings, flags.
 - `scorecard <day> [--json]`: the four gauges per seat, plus items created and closed.
 - `asof <date>`: the board at that date, deterministic.
-- `hook`: reads the harness hook JSON on stdin; on prompt submit prints the seat's row and what changed since the seat's last turn (claimed, GO, RETURN, land refused, appetite spent); on session start prints the row. Silent when nothing changed.
+- `hook`: reads the harness hook JSON on stdin; on prompt submit prints the seat's row and what changed since the seat's last turn (claimed, GO, RETURN, land refused, budget spent); on session start prints the row. Silent when nothing changed.
 
 ## 7. Refusals
 
@@ -126,8 +126,8 @@ Every check ships with a test that makes it fire.
 compiler = { cap = 5, seats = ["proj-1a", "proj-4a"] }
 
 [goal]
-sections = ["Why", "Done when", "Appetite"]
-appetite_unit = "agent-hours"      # wall-clock | agent-hours | runs
+sections = ["Why", "Done when", "Budget"]
+budget_unit = "agent-hours"      # wall-clock | agent-hours | runs
 wip_per_seat = 1
 review_queue_cap = 3
 
@@ -147,7 +147,7 @@ Not a tracker (bd, GitHub Issues), not a messenger (hail), not a runner (Ferry, 
 
 ## 11. Open questions
 
-- Appetite unit by default: wall-clock is derivable everywhere; agent effort needs a sessions adapter.
+- Budget unit by default: wall-clock is derivable everywhere; agent effort needs a sessions adapter.
 - Whether the ledger should be peat's ledger when peat is present, or always andon's own.
 - Pool caps versus a global review-queue cap: the study suggests the review and land queue is the constraint.
 - Whether the originating project's two-day stall was process or decision latency; the board would have shown it either way, but the cause is not yet established.

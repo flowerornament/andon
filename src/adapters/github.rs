@@ -241,8 +241,8 @@ fn issue_events(
     create.set_attr("title", text(issue, "title").unwrap_or_default().to_owned());
     let body = text(issue, "body").unwrap_or_default();
     let sections = crate::goal::sections(body);
-    if let Some(appetite) = crate::goal::section(&sections, "appetite") {
-        create.set_attr("appetite", appetite.to_owned());
+    if let Some(budget) = crate::goal::section(&sections, "budget") {
+        create.set_attr("budget", budget.to_owned());
     }
     if let Some(pool) = crate::goal::section(&sections, "pool") {
         create.set_attr("pool", pool.to_owned());
@@ -413,7 +413,7 @@ mod tests {
         let v = |s: &str| values(s).unwrap_or_else(|e| panic!("{e}"));
         Snapshot {
             issues: v(
-                r###"[{"number":3,"title":"Board shows seats","body":"## Why\nx\n## Appetite\n4 agent-hours","author":{"login":"lead"},"createdAt":"2026-10-12T00:00:00Z","state":"CLOSED","closedAt":"2026-10-13T13:00:00Z","assignees":[{"login":"octo-bot"}],"labels":[],"comments":[{"id":"c1","author":{"login":"lead"},"body":"finding","createdAt":"2026-10-12T05:00:00Z"}]}]"###,
+                r###"[{"number":3,"title":"Board shows seats","body":"## Why\nx\n## Budget\n4 agent-hours","author":{"login":"lead"},"createdAt":"2026-10-12T00:00:00Z","state":"CLOSED","closedAt":"2026-10-13T13:00:00Z","assignees":[{"login":"octo-bot"}],"labels":[],"comments":[{"id":"c1","author":{"login":"lead"},"body":"finding","createdAt":"2026-10-12T05:00:00Z"}]}]"###,
             ),
             prs: v(
                 r#"[{"number":7,"title":"Fix","author":{"login":"octo-bot"},"createdAt":"2026-10-13T09:30:00Z","mergedAt":"2026-10-13T12:00:00Z","mergeCommit":{"oid":"m"},"headRefName":"bot-1/fix","state":"MERGED","closingIssuesReferences":[{"number":3}],"reviews":[{"id":"r1","author":{"login":"lead"},"state":"CHANGES_REQUESTED","submittedAt":"2026-10-13T10:00:00Z","commit":{"oid":"b1"}},{"id":"r2","author":{"login":"lead"},"state":"COMMENTED","submittedAt":"2026-10-13T10:30:00Z"},{"id":"r3","author":{"login":"lead"},"state":"APPROVED","submittedAt":"2026-10-13T11:30:00Z","commit":{"oid":"b2"}}]}]"#,
@@ -459,7 +459,7 @@ mod tests {
             claim.t,
             parse_instant("2026-10-13T09:00:00Z").unwrap_or_else(|e| panic!("{e}"))
         );
-        assert_eq!(events[0].attr_str("appetite"), Some("4 agent-hours"));
+        assert_eq!(events[0].attr_str("budget"), Some("4 agent-hours"));
     }
 
     #[test]

@@ -62,10 +62,10 @@ pub struct Goal {
     pub id: String,
     pub title: Option<String>,
     pub claimed_at: Option<Timestamp>,
-    /// The goal's appetite as written.
-    pub appetite: Option<String>,
-    /// The appetite as a number of hours (or runs), when it states one.
-    pub budget: Option<f64>,
+    /// The goal's budget as written.
+    pub budget: Option<String>,
+    /// The budget as a number of hours (or runs), when it states one.
+    pub amount: Option<f64>,
     pub unit: Option<String>,
     /// Effort spent since the claim, in the budget's unit.
     pub used: Gauge<f64>,
@@ -274,7 +274,7 @@ fn tally(events: &[&Event], since: Timestamp, landings_from: Option<Timestamp>) 
     t
 }
 
-/// The seat's open, claimed goals, with appetite spent.
+/// The seat's open, claimed goals, with budget spent.
 fn goals(
     g: &Gauger<'_>,
     seat: &str,
@@ -286,12 +286,12 @@ fn goals(
         .iter()
         .filter(|(_, item)| item.claimed && !item.closed && item.owner.as_deref() == Some(seat))
         .map(|(id, item)| {
-            let (budget, unit) = item
-                .appetite
+            let (amount, unit) = item
+                .budget
                 .as_deref()
-                .and_then(parse_appetite)
+                .and_then(parse_budget)
                 .map_or((None, None), |(n, u)| (Some(n), Some(u)));
-            let unit_read = unit.as_deref().unwrap_or(&config.board.appetite_unit);
+            let unit_read = unit.as_deref().unwrap_or(&config.board.budget_unit);
             let path = match unit_read {
                 "runs" => "row.goals.used.runs",
                 "wall-clock" => "row.goals.used.wall",
@@ -308,8 +308,8 @@ fn goals(
                 id: id.clone(),
                 title: item.title.clone(),
                 claimed_at: item.claimed_at,
-                appetite: item.appetite.clone(),
-                budget,
+                budget: item.budget.clone(),
+                amount,
                 unit,
                 used,
                 last_work: None,
@@ -369,17 +369,17 @@ fn spent(unit: &str, events: &[&Event], from: Timestamp, to: Timestamp) -> f64 {
     round2(value) + 0.0
 }
 
-static APPETITE: LazyLock<Option<Regex>> = LazyLock::new(|| {
+static BUDGET: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
         r"(?i)(\d+(?:\.\d+)?)\s*(agent[- ]hours?|agent[- ]h\b|hours?|h\b|runs?|wall[- ]clock hours?|days?)",
     )
     .ok()
 });
 
-/// The first budget an appetite states: `about 4 agent-hours` → (4, agent-hours).
+/// The first amount a budget states: `about 4 agent-hours` → (4, agent-hours).
 #[must_use]
-pub fn parse_appetite(text: &str) -> Option<(f64, String)> {
-    let caps = APPETITE.as_ref()?.captures(text)?;
+pub fn parse_budget(text: &str) -> Option<(f64, String)> {
+    let caps = BUDGET.as_ref()?.captures(text)?;
     let n: f64 = caps.get(1)?.as_str().parse().ok()?;
     let word = caps.get(2)?.as_str().to_lowercase();
     let (n, unit) = if word.starts_with("agent") {
@@ -426,10 +426,10 @@ fn flags(
         flags.push(format!("{} goals in progress, WIP {wip}", held.len()));
     }
     for goal in held {
-        if let (Some(budget), Some(used)) = (goal.budget, goal.used.get())
-            && *used > budget
+        if let (Some(amount), Some(used)) = (goal.amount, goal.used.get())
+            && *used > amount
         {
-            flags.push(format!("past appetite on {}", goal.id));
+            flags.push(format!("over budget on {}", goal.id));
         }
     }
     let last_land = row.last_land.get().copied().flatten();
@@ -605,20 +605,20 @@ mod tests {
     }
 
     #[test]
-    fn appetites_state_their_budget() {
+    fn budgets_state_their_amount() {
         assert_eq!(
-            parse_appetite("One agent session (about 4 agent-hours)"),
+            parse_budget("One agent session (about 4 agent-hours)"),
             Some((4.0, "agent-hours".to_owned()))
         );
         assert_eq!(
-            parse_appetite("Two agent sessions (about 8 agent-hours)."),
+            parse_budget("Two agent sessions (about 8 agent-hours)."),
             Some((8.0, "agent-hours".to_owned()))
         );
-        assert_eq!(parse_appetite("30 runs"), Some((30.0, "runs".to_owned())));
+        assert_eq!(parse_budget("30 runs"), Some((30.0, "runs".to_owned())));
         assert_eq!(
-            parse_appetite("2 days"),
+            parse_budget("2 days"),
             Some((48.0, "wall-clock".to_owned()))
         );
-        assert_eq!(parse_appetite("small"), None);
+        assert_eq!(parse_budget("small"), None);
     }
 }

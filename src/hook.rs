@@ -4,7 +4,7 @@
 //!
 //! - `SessionStart`: the seat's row.
 //! - `UserPromptSubmit`: what changed for the seat since its last turn
-//!   (a verdict, a claim or close, a landing, a refused land, appetite spent),
+//!   (a verdict, a claim or close, a landing, a refused land, budget spent),
 //!   then the row. Silent when nothing changed.
 //!
 //! The last turn is read from the transcript the payload names: the time of
@@ -146,10 +146,10 @@ pub fn render(
     if let Some(prev) = before.seats.iter().find(|r| r.seat == seat) {
         let was = held(prev);
         let over =
-            |g: &board::Goal| matches!((g.used.get(), g.budget), (Some(u), Some(b)) if *u > b);
+            |g: &board::Goal| matches!((g.used.get(), g.amount), (Some(u), Some(b)) if *u > b);
         for goal in held(row) {
             if over(&goal) && !was.iter().find(|g| g.id == goal.id).is_some_and(over) {
-                changes.push(format!("appetite spent on {}", goal.id));
+                changes.push(format!("over budget on {}", goal.id));
             }
         }
     }
@@ -387,7 +387,7 @@ mod tests {
         let mut create = Event::new(at("2026-10-13T09:00:00Z"), Kind::Create, "bd");
         create.subject = Some("andon-xa4".into());
         create.ids.goal = create.subject.clone();
-        create.set_attr("appetite", "about 8 agent-hours");
+        create.set_attr("budget", "about 8 agent-hours");
         let mut verdict = Event::new(at("2026-10-13T12:00:00Z"), Kind::Verdict, "bd");
         verdict.actor = Some("andon-1b".into());
         verdict.subject = Some("andon-xa4".into());

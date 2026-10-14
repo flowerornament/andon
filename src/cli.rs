@@ -44,7 +44,9 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// One row per seat: goal, appetite spent, landings, runs, verdict, flags.
+    /// One row per seat: goal, budget spent, landings, runs, verdict, flags.
+    ///
+    /// Budget: the finite effort a goal's `## Budget` section allows (agent-hours, hours, days or runs); the board shows it as spent/allowed and flags a goal over it.
     Board {
         /// Only this seat's row.
         #[arg(long)]
@@ -95,7 +97,7 @@ pub enum CheckCommand {
         seat: Option<String>,
     },
     /// The goal has its sections, a done-when that can fail, a finite
-    /// appetite, and room in its pool. `-` reads a description on stdin.
+    /// budget, and room in its pool. `-` reads a description on stdin.
     Goal { id: String },
     /// A decision kind names the goal it serves.
     Message {

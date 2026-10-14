@@ -1,5 +1,5 @@
 //! The goal schema (founding design §3): why, a done-when that can fail, an
-//! appetite, a pool, an owner. A goal's description carries the first four as
+//! budget, a pool, an owner. A goal's description carries the first four as
 //! sections; the owner is set by a claim, never by hand.
 
 use std::collections::BTreeMap;
@@ -136,12 +136,12 @@ pub fn problems(description: &str, config: &Config) -> Vec<String> {
             problems.push(format!("add a \"## {name}\" section"));
         }
     }
-    if let Some(appetite) = section(&found, &config.goal.appetite)
-        && crate::fold::board::parse_appetite(appetite).is_none()
+    if let Some(budget) = section(&found, &config.goal.budget)
+        && crate::fold::board::parse_budget(budget).is_none()
     {
         problems.push(format!(
             "state the {} as a number of agent-hours, hours, days or runs",
-            config.goal.appetite
+            config.goal.budget
         ));
     }
     if config.goal.require_pool {
@@ -279,7 +279,7 @@ mod tests {
 
     use super::*;
 
-    const GOAL: &str = "## Why\n\nBecause.\n\n## Done when\n\n`cargo test` passes the study pins.\n\n## Appetite\n\nTwo sessions (about 8 agent-hours).\n";
+    const GOAL: &str = "## Why\n\nBecause.\n\n## Done when\n\n`cargo test` passes the study pins.\n\n## Budget\n\nTwo sessions (about 8 agent-hours).\n";
 
     #[test]
     fn a_capture_group_is_the_goal_id() {
@@ -312,11 +312,10 @@ mod tests {
         let s = sections(GOAL);
         assert_eq!(section(&s, "Why"), Some("Because."));
         assert_eq!(
-            section(&s, "appetite"),
+            section(&s, "budget"),
             Some("Two sessions (about 8 agent-hours).")
         );
-        let inline =
-            sections("Why: speed\nDone when: `just check` passes\nAppetite: 2 agent-hours");
+        let inline = sections("Why: speed\nDone when: `just check` passes\nBudget: 2 agent-hours");
         assert_eq!(section(&inline, "done when"), Some("`just check` passes"));
     }
 
@@ -335,7 +334,7 @@ mod tests {
             p,
             vec![
                 "add a \"## Done when\" section".to_owned(),
-                "add a \"## Appetite\" section".to_owned()
+                "add a \"## Budget\" section".to_owned()
             ]
         );
     }
@@ -424,11 +423,11 @@ mod tests {
     }
 
     #[test]
-    fn an_unbounded_appetite_is_refused() {
+    fn an_unbounded_budget_is_refused() {
         let goal = GOAL.replace("Two sessions (about 8 agent-hours).", "as long as it takes");
         assert_eq!(
             problems(&goal, &Config::default()),
-            vec!["state the Appetite as a number of agent-hours, hours, days or runs".to_owned()]
+            vec!["state the Budget as a number of agent-hours, hours, days or runs".to_owned()]
         );
     }
 

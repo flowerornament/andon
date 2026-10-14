@@ -57,10 +57,10 @@ fn the_hooks_row_is_the_boards_row() {
     .join("\n");
     write(&root.join("codex/2026/10/13/rollout-r1.jsonl"), &codex);
 
-    // the claim and its appetite, from a project-owned external adapter
+    // the claim and its budget, from a project-owned external adapter
     let claims = [
         r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":"pass","source":"tracker","attrs":{"covers":["create","claim","close"]}}"#,
-        r#"{"t":"2026-10-13T08:00:00Z","kind":"create","subject":"x-goal","ids":{"goal":"x-goal"},"source":"tracker","attrs":{"appetite":"4 agent-hours"}}"#,
+        r#"{"t":"2026-10-13T08:00:00Z","kind":"create","subject":"x-goal","ids":{"goal":"x-goal"},"source":"tracker","attrs":{"budget":"4 agent-hours"}}"#,
         r#"{"t":"2026-10-13T08:30:00Z","kind":"claim","actor":"x-1a","subject":"x-goal","ids":{"goal":"x-goal"},"source":"tracker"}"#,
     ]
     .join("\n");

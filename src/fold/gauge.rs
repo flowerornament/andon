@@ -387,7 +387,7 @@ mod tests {
     }
 
     /// A gauge that reads no kind is never unknown for want of coverage, so
-    /// it must be declared: today only wall-clock appetite, which is the
+    /// it must be declared: today only wall-clock budget, which is the
     /// claim's age and is unknown with the goals held.
     const KINDLESS: &[&str] = &["row.goals.used.wall"];
 

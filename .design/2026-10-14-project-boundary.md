@@ -27,7 +27,7 @@ convention is a setting: seat names and their labels, the goal-id pattern and
 where a commit cites it, trailer names, a verdict comment's format, receipt
 locations, message labels, pools and WIP. Defaults are andon's own
 conventions (the trailers `scripts/jj-identity` writes, goal sections Why,
-Done when and Appetite), never another project's.
+Done when and Budget), never another project's.
 
 **The ledger** (JSONL, one event per line). It is what `andon ledger` prints
 and `--ledger FILE` reads, and it is what an external adapter emits.
@@ -48,7 +48,7 @@ and `--ledger FILE` reads, and it is what an external adapter emits.
   "outcome": pass | fail | go | return | refused | stopped | unknown
   "source":  string, required: the artifact the fact came from
   "attrs":   object: facts the folds read by name (recipe, repo, reason,
-             failure_tail, message_kind, to, re, goals, title, appetite, pool,
+             failure_tail, message_kind, to, re, goals, title, budget, pool,
              assignee, workspace, branch)
 }
 ```

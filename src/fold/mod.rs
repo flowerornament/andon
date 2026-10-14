@@ -128,7 +128,7 @@ impl<'a> Index<'a> {
                     if item.title.is_none() {
                         item.title = event.attr_str("title").map(str::to_owned);
                     }
-                    item.appetite = event.attr_str("appetite").map(str::to_owned);
+                    item.budget = event.attr_str("budget").map(str::to_owned);
                 }
                 Kind::Claim => {
                     item.owner = event.seat.clone().or_else(|| event.actor.clone());
@@ -157,7 +157,7 @@ pub struct Item {
     pub closed: bool,
     pub closed_at: Option<Timestamp>,
     pub title: Option<String>,
-    pub appetite: Option<String>,
+    pub budget: Option<String>,
 }
 
 /// The median, rounded to two decimals; `None` for no values.

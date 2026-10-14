@@ -36,20 +36,20 @@ Agents, unlike people, pay nothing to create an item, a message or a run, so the
                                    │ check commit  cites a goal   │
                                    │               claimed by seat│
                                    │ check goal    why·done-when· │
-                                   │               appetite·pool  │
+                                   │               budget·pool  │
                                    │ check message names a goal   │
                                    └──────────────────────────────┘
 ```
 
 Three contracts make it project-independent:
 
-1. **The goal schema.** The unit of work is a goal: why, a falsifiable done-when, an appetite, a pool, an owner. The how belongs to the agent and never becomes a tracked item. The tracker stores goals; andon validates them.
+1. **The goal schema.** The unit of work is a goal: why, a falsifiable done-when, a budget, a pool, an owner. The how belongs to the agent and never becomes a tracked item. The tracker stores goals; andon validates them.
 2. **The event ledger.** Every adapter emits one type: `{t, seat, kind, subject, ids{commit, change, goal, verdict, receipt, session}, outcome}`. Joins are by id, so a project's conventions (trailers, subject prefixes, branch names, bot accounts) live in adapter config, not in the fold.
 3. **The refusals.** Called from the project's own choke points (its land or merge verb, its goal creation, its messenger's send), each exits non-zero and names the fix. andon does not own the choke point.
 
 ## Surfaces
 
-- `andon board [--seat S]` — goal, effort used of appetite, landings, runs and pass rate, last verdict, open findings, flags (past appetite, no landing in N days, last land refused).
+- `andon board [--seat S]` — goal, effort used of budget, landings, runs and pass rate, last verdict, open findings, flags (past budget, no landing in N days, last land refused).
 - `andon scorecard <day>` — the four gauges per seat.
 - `andon asof <date>` — the board as it stood, replayed from the ledger.
 - `andon hook` — reads the harness hook JSON on stdin, prints the seat's row. Claude Code and Codex.

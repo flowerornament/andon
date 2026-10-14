@@ -302,7 +302,7 @@ fn reasons(entries: &[(String, String)]) -> String {
             .map_or(("", key.as_str()), |(w, g)| (w, g));
         let (gauges, seats) = by_reason.entry(why.as_str()).or_default();
         let gauge = if gauge.starts_with("goals.") && gauge.split('.').nth(2) == Some("used") {
-            "appetite".to_owned()
+            "budget".to_owned()
         } else {
             gauge.split('.').next().unwrap_or(gauge).to_owned()
         };
@@ -339,7 +339,7 @@ pub fn board_header() -> Vec<String> {
     [
         "seat",
         "goal",
-        "appetite",
+        "budget",
         "lands",
         "last",
         "runs",
@@ -362,17 +362,17 @@ pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
         (Some(g), 1) => g.id.clone(),
         (Some(g), n) => format!("{} +{}", g.id, n - 1),
     });
-    // appetite is the lead goal's: unknown when the goals are
-    let appetite = match row.goals.get() {
+    // budget is the lead goal's: unknown when the goals are
+    let budget = match row.goals.get() {
         None => "?".to_owned(),
         Some(goals) => goals.first().map_or_else(
             || "—".to_owned(),
             |g| {
-                g.used.cell(|used| match (g.budget, g.unit.as_deref()) {
-                    (Some(budget), Some(unit)) => {
-                        format!("{used:.1}/{budget:.0} {}", unit_short(unit))
+                g.used.cell(|used| match (g.amount, g.unit.as_deref()) {
+                    (Some(amount), Some(unit)) => {
+                        format!("{used:.1}/{amount:.0} {}", unit_short(unit))
                     }
-                    // the goal states no budget: show what was spent
+                    // the goal states no amount: show what was spent
                     _ => format!("{used:.1} ah"),
                 })
             },
@@ -393,7 +393,7 @@ pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
     vec![
         row.seat.clone(),
         goal_cell,
-        appetite,
+        budget,
         count(&row.landings),
         row.last_land
             .cell(|l| l.map_or_else(|| "—".to_owned(), |t| age(t, now))),

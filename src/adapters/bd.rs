@@ -2,7 +2,7 @@
 //! prints without writing anything (founding design §5).
 //!
 //! Emits, per issue: `create` at its creation (by its creator, with the goal's
-//! title and appetite), `claim` at its start (by its assignee), `close` at its
+//! title and budget), `claim` at its start (by its assignee), `close` at its
 //! close. Per comment: `verdict` when the comment is a verdict (the configured
 //! prefix, then JSON), else `other:comment`, the goal's findings.
 //!
@@ -117,8 +117,8 @@ pub fn issue_events(
         e.set_attr("assignee", text(issue, "assignee").unwrap_or_default());
         let description = text(issue, "description").unwrap_or_default();
         let sections = goal::sections(description);
-        if let Some(appetite) = goal::section(&sections, &config.goal.appetite) {
-            e.set_attr("appetite", appetite.to_owned());
+        if let Some(budget) = goal::section(&sections, &config.goal.budget) {
+            e.set_attr("budget", budget.to_owned());
         }
         if let Some(pool) = goal::section(&sections, "pool") {
             e.set_attr("pool", pool.to_owned());
@@ -296,7 +296,7 @@ mod tests {
         }
     }
 
-    const EXPORT: &str = r###"{"id":"andon-xa4","title":"Instrument","description":"## Why\n\nx\n\n## Done when\n\n`cargo test`\n\n## Appetite\n\nabout 8 agent-hours\n","status":"in_progress","assignee":"andon-1b","created_at":"2026-10-13T23:10:49Z","created_by":"andon","started_at":"2026-10-13T23:10:56Z","updated_at":"2026-10-13T23:10:56Z","comments":[{"id":"c1","issue_id":"andon-xa4","author":"andon-1a","text":"finding: the hub is andon-1a","created_at":"2026-10-13T23:20:00Z"},{"id":"c2","issue_id":"andon-xa4","author":"andon-1a","text":"Review-Verdict: {\"verdict\":\"RETURN\",\"candidate\":\"abc\",\"changes\":[[\"wnon\",\"x\"]],\"critic\":{\"session\":\"s9\"}} trailing prose","created_at":"2026-10-13T23:30:00Z"}]}
+    const EXPORT: &str = r###"{"id":"andon-xa4","title":"Instrument","description":"## Why\n\nx\n\n## Done when\n\n`cargo test`\n\n## Budget\n\nabout 8 agent-hours\n","status":"in_progress","assignee":"andon-1b","created_at":"2026-10-13T23:10:49Z","created_by":"andon","started_at":"2026-10-13T23:10:56Z","updated_at":"2026-10-13T23:10:56Z","comments":[{"id":"c1","issue_id":"andon-xa4","author":"andon-1a","text":"finding: the hub is andon-1a","created_at":"2026-10-13T23:20:00Z"},{"id":"c2","issue_id":"andon-xa4","author":"andon-1a","text":"Review-Verdict: {\"verdict\":\"RETURN\",\"candidate\":\"abc\",\"changes\":[[\"wnon\",\"x\"]],\"critic\":{\"session\":\"s9\"}} trailing prose","created_at":"2026-10-13T23:30:00Z"}]}
 {"id":"andon-p1","title":"Assigned, not started","status":"open","assignee":"andon-1a","created_at":"2026-10-13T20:00:00Z"}
 {"id":"andon-76c","title":"Census","status":"closed","created_at":"2026-10-13T20:00:00Z","closed_at":"2026-10-13T21:00:00Z","close_reason":"done"}"###;
 
@@ -318,7 +318,7 @@ mod tests {
                 "close"
             ]
         );
-        assert_eq!(events[0].attr_str("appetite"), Some("about 8 agent-hours"));
+        assert_eq!(events[0].attr_str("budget"), Some("about 8 agent-hours"));
         assert_eq!(events[1].actor.as_deref(), Some("andon-1b"));
         let verdict = &events[3];
         assert_eq!(verdict.outcome, Some(Outcome::Return));

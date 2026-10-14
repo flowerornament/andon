@@ -93,7 +93,7 @@ fn day(fault: Option<(&str, Fault)>, drop: Option<&str>) -> Ledger {
     message.set_attr("message_kind", "ask");
     message.set_attr("to", vec!["x-1b".to_owned()]);
     let mut create = fact("2026-10-13T08:00:00Z", Kind::Create, Some("x-goal"));
-    create.set_attr("appetite", "4 agent-hours");
+    create.set_attr("budget", "4 agent-hours");
     let claim = fact("2026-10-13T09:00:00Z", Kind::Claim, Some("x-goal"));
     let comment = fact(
         "2026-10-13T09:30:00Z",
@@ -328,7 +328,7 @@ fn a_gap_makes_its_kind_unknown_for_every_seat() {
             Some("1 sessions source could not be read: t.jsonl: permission denied")
         );
     }
-    // the board's appetite spent reads sessions too, in JSON as in text (C8)
+    // the board's budget spent reads sessions too, in JSON as in text (C8)
     let b = board(&l, &config(), at(NOON));
     let gone = unknown(&b);
     let i = b
@@ -509,7 +509,7 @@ fn every_gauge_registers_each_kind_its_value_depends_on() {
             let (Some(x), Some(y)) = (value_at(before, path), value_at(after, path)) else {
                 continue;
             };
-            // a gauge holding gauges (goals, each with its appetite spent) is
+            // a gauge holding gauges (goals, each with its budget spent) is
             // compared without them: each nested gauge is checked as its own
             let (mut x, mut y) = (x.clone(), y.clone());
             for (_, inner) in instances.iter().filter(|(b, _)| b == board) {

@@ -7,7 +7,7 @@
 //! | `check commit`   | no goal cited; the goal is unknown, closed, or not   |
 //! |                  | claimed by the committing seat; the seat is past WIP |
 //! | `check goal`     | a section is missing; the done-when cannot fail; the |
-//! |                  | appetite is unbounded; the pool is at its cap        |
+//! |                  | budget is unbounded; the pool is at its cap        |
 //! | `check message`  | a decision kind names no goal, or a closed one       |
 
 use std::collections::BTreeMap;
@@ -176,7 +176,7 @@ pub fn goal(
         return Answer::Warn(format!("{id}: {advice}"));
     }
     Answer::Ok(format!(
-        "{id} has its sections, a done-when naming a check, and a finite appetite"
+        "{id} has its sections, a done-when naming a check, and a finite budget"
     ))
 }
 
@@ -398,7 +398,7 @@ mod tests {
         );
     }
 
-    const GOAL: &str = "## Why\n\nx\n\n## Done when\n\n`just check` passes\n\n## Appetite\n\n4 agent-hours\n\n## Pool\n\ncore\n";
+    const GOAL: &str = "## Why\n\nx\n\n## Done when\n\n`just check` passes\n\n## Budget\n\n4 agent-hours\n\n## Pool\n\ncore\n";
 
     #[test]
     fn goal_check_refuses_a_missing_section_and_a_full_pool() {

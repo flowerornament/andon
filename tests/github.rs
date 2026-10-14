@@ -145,7 +145,7 @@ fn a_github_native_repository_shows_a_board() {
         bot1.goals
             .get()
             .and_then(|g| g.first())
-            .and_then(|g| g.budget),
+            .and_then(|g| g.amount),
         Some(4.0)
     );
     assert_eq!(

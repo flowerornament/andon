@@ -87,14 +87,14 @@ fn a_goal_check_refuses_missing_sections_and_warns_on_a_vague_done_when() {
         }
         child.wait_with_output().unwrap_or_else(|e| panic!("{e}"))
     };
-    let missing = run(b"## Why\n\nx\n\n## Appetite\n\n2 agent-hours\n");
+    let missing = run(b"## Why\n\nx\n\n## Budget\n\n2 agent-hours\n");
     assert_eq!(missing.status.code(), Some(1));
     assert_eq!(
         stdout(&missing),
         "refused: the description: add a \"## Done when\" section\n"
     );
     let vague =
-        run(b"## Why\n\nx\n\n## Done when\n\nimprove things\n\n## Appetite\n\n2 agent-hours\n");
+        run(b"## Why\n\nx\n\n## Done when\n\nimprove things\n\n## Budget\n\n2 agent-hours\n");
     assert_eq!(vague.status.code(), Some(0));
     assert_eq!(
         stdout(&vague),

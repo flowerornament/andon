@@ -46,7 +46,7 @@ Each writing agent gets its own workspace, so it never snapshots another agent's
 
 andon's own tracker is bd, and it holds goals only (`.design/2026-10-13-andon-founding.md` §3). This section overrides bd's generic guidance, including what `bd prime` prints.
 
-- **The unit is a goal:** why, a done-when that can fail, an appetite. The how is yours and never becomes an item.
+- **The unit is a goal:** why, a done-when that can fail, a budget. The how is yours and never becomes an item.
 - **Findings go on the goal** as a `bd comments add` comment; its owner keeps or drops them when it closes. Nothing is filed "for follow-up", and no item is created for a plan step.
 - **Every landing cites a goal** in its subject: `area: subject (andon-xxx)`.
 - **Memory** is not kept in bd (`bd remember`) or in ad hoc files; durable facts belong in the code, the living documents or a dated design document.
