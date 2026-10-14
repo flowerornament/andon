@@ -4,6 +4,10 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+## v0.2.0 - 2026-10-14
+
+The first adopter's fixes, and a rename that breaks 0.1.0 configs and JSON.
+
 - The git adapter refuses a configured path that is not the top level of
   its own git repository, rather than answering for an enclosing one, and
   an inherited `GIT_DIR` (or work tree, index, object store) no longer
