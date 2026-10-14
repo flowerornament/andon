@@ -1,0 +1,5 @@
+[
+  {"databaseId": 101, "headSha": "x", "headBranch": "bot-1/board", "conclusion": "failure", "status": "completed", "createdAt": "2026-10-13T09:40:00Z", "updatedAt": "2026-10-13T09:50:00Z", "name": "CI", "workflowName": "CI", "event": "pull_request", "url": "https://github.com/octo/demo/actions/runs/101"},
+  {"databaseId": 102, "headSha": "y", "headBranch": "bot-1/board", "conclusion": "success", "status": "completed", "createdAt": "2026-10-13T11:00:00Z", "updatedAt": "2026-10-13T11:10:00Z", "name": "CI", "workflowName": "CI", "event": "pull_request", "url": "https://github.com/octo/demo/actions/runs/102"},
+  {"databaseId": 103, "headSha": "z", "headBranch": "bot-2/hook", "conclusion": "failure", "status": "completed", "createdAt": "2026-10-13T10:30:00Z", "updatedAt": "2026-10-13T10:40:00Z", "name": "CI", "workflowName": "CI", "event": "pull_request", "url": "https://github.com/octo/demo/actions/runs/103"}
+]

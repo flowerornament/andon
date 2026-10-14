@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: taiki-e/install-action@be5d41457cdd7bd9986d07500bf51a8c67803dbf # just
+
+      - name: Install shellcheck
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          else
+            brew install shellcheck
+          fi
+
+      # Reads rust-toolchain.toml (the pinned toolchain and its components)
+      # and caches cargo's registry and target directory between runs.
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rustflags: ""
+
+      - name: Verify pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Check gate
+        run: just check
+
+  nix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+
+      - name: Flake package smoke test
+        run: |
+          out="$(nix build --accept-flake-config --no-link --print-out-paths .)"
+          "$out/bin/andon" --version
+          "$out/bin/andon" --help >/dev/null
+          nix run . -- --version

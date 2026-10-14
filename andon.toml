@@ -1,0 +1,40 @@
+# andon supervises its own development (AGENTS.md, "How the product builds
+# itself"). Seats are the jj workspaces; see `jj workspace list`.
+
+[project]
+name = "andon"
+goal_pattern = '\bandon-[a-z0-9]{3,6}\b'
+
+[seats.andon]
+# the colocated checkout: the coordinator's hail seat; jj calls it default
+aliases = ["default"]
+[seats.andon-1a]
+[seats.andon-1b]
+
+[goal]
+sections = ["Why", "Done when", "Appetite"]
+wip_per_seat = 1
+
+[messages]
+decision_kinds = ["ask", "go", "nogo", "ruling", "block", "stop"]
+
+[adapters.jj]
+repo = "."
+trunk = "main"
+
+[adapters.bd]
+dir = "."
+
+[adapters.ferry]
+receipts = ["~/code/andon*/.ferry/receipts"]
+
+[adapters.hail]
+labels = ["andon*"]
+# andon began on 2026-10-12; older mail is other projects'
+since = "2026-10-12"
+
+[adapters.sessions]
+claude = ["~/.claude*/projects/*-code-andon*"]
+codex = ["~/.codex/sessions"]
+cwd = ["~/code/andon*"]
+since = "2026-10-12"

@@ -1,0 +1,4 @@
+[
+  {"number": 3, "title": "Board shows each seat", "body": "## Why\n\nSeats need to see each other.\n\n## Done when\n\n`andon board` prints a row per seat.\n\n## Appetite\n\n4 agent-hours\n", "author": {"login": "lead"}, "createdAt": "2026-10-12T08:00:00Z", "state": "CLOSED", "closedAt": "2026-10-13T12:05:00Z", "assignees": [{"login": "octo-bot"}], "labels": [], "comments": [{"id": "IC_1", "author": {"login": "lead"}, "body": "finding: rows need a goal column", "createdAt": "2026-10-13T09:15:00Z"}]},
+  {"number": 4, "title": "Hook prints changes", "body": "## Why\n\nAgents should not ask.\n\n## Done when\n\n`andon hook` prints a RETURN.\n\n## Appetite\n\n6 agent-hours\n", "author": {"login": "lead"}, "createdAt": "2026-10-12T08:00:00Z", "state": "OPEN", "closedAt": null, "assignees": [{"login": "helper-bot"}], "labels": [], "comments": []}
+]

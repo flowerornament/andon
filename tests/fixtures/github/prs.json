@@ -1,0 +1,9 @@
+[
+  {"number": 7, "title": "Board rows", "author": {"login": "octo-bot"}, "createdAt": "2026-10-13T09:30:00Z", "mergedAt": "2026-10-13T12:00:00Z", "mergeCommit": {"oid": "MERGE"}, "headRefName": "bot-1/board", "state": "MERGED", "closingIssuesReferences": [{"number": 3}],
+   "reviews": [
+     {"id": "PRR_1", "author": {"login": "lead"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-13T10:00:00Z", "commit": {"oid": "x"}},
+     {"id": "PRR_2", "author": {"login": "lead"}, "state": "APPROVED", "submittedAt": "2026-10-13T11:30:00Z", "commit": {"oid": "y"}}
+   ]},
+  {"number": 8, "title": "Hook", "author": {"login": "helper-bot"}, "createdAt": "2026-10-13T10:00:00Z", "mergedAt": null, "mergeCommit": null, "headRefName": "bot-2/hook", "state": "OPEN", "closingIssuesReferences": [{"number": 4}],
+   "reviews": [{"id": "PRR_3", "author": {"login": "lead"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-13T11:00:00Z", "commit": {"oid": "z"}}]}
+]
