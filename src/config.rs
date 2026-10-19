@@ -121,6 +121,46 @@ pub struct Pool {
     pub seats: Vec<String>,
 }
 
+/// A tracker field that stands in for a goal section.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum GoalField {
+    /// The field's name.
+    Name(String),
+    /// A field holding a number, and the unit it is in.
+    Number(NumberField),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NumberField {
+    pub field: String,
+    pub unit: String,
+}
+
+impl GoalField {
+    /// The tracker field's name.
+    #[must_use]
+    pub fn field(&self) -> &str {
+        match self {
+            Self::Name(f) => f,
+            Self::Number(n) => &n.field,
+        }
+    }
+
+    /// The unit a number in the field is in: stated, or the field name's
+    /// own ending (`estimated_minutes`).
+    #[must_use]
+    pub fn unit(&self) -> Option<&str> {
+        match self {
+            Self::Number(n) => Some(&n.unit),
+            Self::Name(f) if f.ends_with("_minutes") => Some("minutes"),
+            Self::Name(f) if f.ends_with("_hours") => Some("agent-hours"),
+            Self::Name(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoalRules {
@@ -149,9 +189,11 @@ pub struct GoalRules {
     /// Sections kept in a tracker field rather than the description:
     /// section name to field (`"Done when" = "acceptance_criteria"`). The bd
     /// and GitHub adapters read the field as that section where the
-    /// description has none.
+    /// description has none. A field holding a number names its unit:
+    /// `"Budget" = { field = "estimated", unit = "minutes" }`, or by a
+    /// `_minutes` or `_hours` ending (`"Budget" = "estimated_minutes"`).
     #[serde(default)]
-    pub fields: BTreeMap<String, String>,
+    pub fields: BTreeMap<String, GoalField>,
     /// Tracker item types that count toward WIP; others (an epic a lane's
     /// owner holds) do not. An item of no stated type counts.
     #[serde(default = "default_types")]

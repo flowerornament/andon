@@ -103,6 +103,8 @@ A goal section kept in a tracker field rather than the description is mapped in 
 ```toml
 [goal.fields]
 "Done when" = "acceptance_criteria"
+"Budget" = "estimated_minutes"        # a number: its unit from the name, or
+# "Budget" = { field = "estimate", unit = "agent-hours" }
 ```
 
 With no `[goal]` section, andon applies no goal schema: `check goal` and `check commit` pass with a note, and the board shows no goal or budget columns. `andon init` declares `[goal]`. The land verb's gate recipe is `[project] land_recipe` (default `land`).

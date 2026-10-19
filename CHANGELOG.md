@@ -4,6 +4,12 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- A budget can come from a numeric tracker field: `[goal.fields]
+  "Budget" = "estimated_minutes"` (the unit from a `_minutes` or `_hours`
+  ending), or `{ field = "...", unit = "..." }`. The board, the hook's
+  over-budget flag and `check goal` read it. Budgets in minutes render as
+  `min`.
+
 - **No `[goal]`, no goal checks** (`.design/2026-10-19-goal-schema-as-config.md`).
   A config without `[goal]` gets no goal checks: `check goal` and `check
   commit` pass with a note, the board drops its goal and budget columns,

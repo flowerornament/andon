@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::config::Config;
+use crate::config::{Config, GoalField};
 
 /// The first goal id in `text`. A pattern with a capture group yields the
 /// group (`(?:Closes|Fixes) #(\d+)` yields `12`), else the whole match.
@@ -72,12 +72,14 @@ pub fn candidates(pattern: &Regex, subject: &str, message: &str, config: &Config
 
 /// A goal's text with the sections config keeps in tracker fields
 /// (`[goal.fields]`) added, each where the description lacks it. A field
-/// value that begins with its own label (`Done when: ...`) loses it.
+/// value that begins with its own label (`Done when: ...`) loses it. A
+/// number is written with its unit (`90 minutes`); 0 is no value, as bd
+/// stores an unset estimate.
 #[must_use]
 pub fn with_fields(
     description: &str,
     record: &serde_json::Value,
-    fields: &BTreeMap<String, String>,
+    fields: &BTreeMap<String, GoalField>,
 ) -> String {
     let have = sections(description);
     let mut text = description.to_owned();
@@ -85,10 +87,19 @@ pub fn with_fields(
         if section(&have, name).is_some() {
             continue;
         }
-        let Some(value) = record[field.as_str()]
-            .as_str()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
+        let raw = &record[field.field()];
+        let number = raw
+            .as_f64()
+            .filter(|n| *n > 0.0)
+            .map(|n| match field.unit() {
+                Some(unit) => format!("{n} {unit}"),
+                // a number of no stated unit is written bare: check goal
+                // refuses it, naming the fix
+                None => n.to_string(),
+            });
+        let Some(value) = number
+            .as_deref()
+            .or_else(|| raw.as_str().map(str::trim).filter(|v| !v.is_empty()))
         else {
             continue;
         };
@@ -173,7 +184,7 @@ pub fn problems(description: &str, config: &Config) -> Vec<String> {
         && parse_budget(budget).is_none()
     {
         problems.push(format!(
-            "state the {} as a number of agent-hours, hours, days or runs",
+            "state the {} as a number of agent-hours, hours, minutes, days or runs",
             config.goal.budget
         ));
     }
@@ -308,7 +319,7 @@ fn first_words(text: &str) -> String {
 
 static BUDGET: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(\d+(?:\.\d+)?)\s*(agent[- ]hours?|agent[- ]h\b|hours?|h\b|runs?|wall[- ]clock hours?|days?)",
+        r"(?i)(\d+(?:\.\d+)?)\s*(agent[- ]hours?|agent[- ]h\b|hours?|h\b|runs?|wall[- ]clock hours?|days?|minutes?|mins?\b)",
     )
     .ok()
 });
@@ -327,6 +338,8 @@ pub fn parse_budget(text: &str) -> Option<(f64, String)> {
         (n * 24.0, "wall-clock")
     } else if word.starts_with("wall") {
         (n, "wall-clock")
+    } else if word.starts_with("min") {
+        (n, "minutes")
     } else {
         (n, "agent-hours")
     };
@@ -487,7 +500,10 @@ mod tests {
         let goal = GOAL.replace("Two sessions (about 8 agent-hours).", "as long as it takes");
         assert_eq!(
             problems(&goal, &Config::default()),
-            vec!["state the Budget as a number of agent-hours, hours, days or runs".to_owned()]
+            vec![
+                "state the Budget as a number of agent-hours, hours, minutes, days or runs"
+                    .to_owned()
+            ]
         );
     }
 
@@ -524,5 +540,50 @@ mod tests {
             Some((48.0, "wall-clock".to_owned()))
         );
         assert_eq!(parse_budget("small"), None);
+    }
+
+    #[test]
+    fn a_number_in_a_tracker_field_is_a_budget_in_its_unit() {
+        let fields = |toml: &str| {
+            Config::parse(&format!("[goal]\n[goal.fields]\n{toml}"), Path::new("/"))
+                .unwrap_or_else(|e| panic!("{e}"))
+                .goal
+                .fields
+        };
+        let record =
+            serde_json::json!({"estimated_minutes": 90, "estimate": 2, "unset_minutes": 0});
+        let budget = |toml: &str| {
+            let text = with_fields("## Why\n\nx\n", &record, &fields(toml));
+            section(&sections(&text), "budget").map(str::to_owned)
+        };
+        // the field's own ending names the unit, or the config does
+        assert_eq!(
+            budget("\"Budget\" = \"estimated_minutes\"").as_deref(),
+            Some("90 minutes")
+        );
+        assert_eq!(
+            budget("\"Budget\" = { field = \"estimate\", unit = \"agent-hours\" }").as_deref(),
+            Some("2 agent-hours")
+        );
+        // 0 is bd's unset estimate: no budget
+        assert_eq!(budget("\"Budget\" = \"unset_minutes\""), None);
+        assert_eq!(
+            parse_budget("90 minutes"),
+            Some((90.0, "minutes".to_owned()))
+        );
+        // a number of no known unit is written bare, and check goal names the fix
+        let bare = with_fields(
+            "## Why\n\nx\n\n## Done when\n\n`cargo test` passes\n",
+            &record,
+            &fields("\"Budget\" = \"estimate\""),
+        );
+        let c = Config::parse("[goal]\n", Path::new("/")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            problems(&bare, &c),
+            vec![
+                "state the Budget as a number of agent-hours, hours, minutes, days or runs"
+                    .to_owned()
+            ]
+        );
     }
 }

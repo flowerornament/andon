@@ -169,7 +169,7 @@ pub fn events(
     gc: &GithubConfig,
     source: &str,
     now: jiff::Timestamp,
-    fields: &std::collections::BTreeMap<String, String>,
+    fields: &std::collections::BTreeMap<String, crate::config::GoalField>,
 ) -> Result<Vec<Event>> {
     let who = |login: Option<&str>| -> Option<String> {
         login.map(|l| gc.accounts.get(l).cloned().unwrap_or_else(|| l.to_owned()))
@@ -273,7 +273,7 @@ fn issue_events(
     assigned: &HashMap<(i64, String), String>,
     who: &dyn Fn(Option<&str>) -> Option<String>,
     source: &str,
-    fields: &std::collections::BTreeMap<String, String>,
+    fields: &std::collections::BTreeMap<String, crate::config::GoalField>,
     now: jiff::Timestamp,
 ) -> Result<Vec<Event>> {
     const ISSUE: &[&str] = &["create", "claim", "close", "other:comment"];

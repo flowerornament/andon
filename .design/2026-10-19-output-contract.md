@@ -104,3 +104,11 @@ andon: <seat>  <goal>  budget <cell>  lands <cell>  …  ⚑ <flags>
 - 0: rendered, or passed;
 - 1: a check refused, with one line naming the fix;
 - 2: andon could not decide, with one line saying what to repair.
+
+## Amendment: budgets in minutes (2026-10-19, andon-co4)
+
+`seats[].goals[].unit` gains the value `minutes`, for a budget read from a
+numeric tracker field such as bd's `estimated_minutes`. Its `used` is then
+in minutes too. The field and its meaning are unchanged, so the schema
+stays 2. Its values are `agent-hours`, `wall-clock`, `runs` and `minutes`,
+or `null` where the budget states no amount.

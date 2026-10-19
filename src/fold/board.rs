@@ -478,6 +478,10 @@ fn spent(unit: &str, events: &[&Event], from: Timestamp, to: Timestamp) -> f64 {
             n
         }
         "wall-clock" => minutes(from, to) / 60.0,
+        "minutes" => events
+            .iter()
+            .map(|e| session_minutes(e, from, to))
+            .sum::<f64>(),
         _ => {
             events
                 .iter()

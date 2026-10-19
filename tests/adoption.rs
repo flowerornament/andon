@@ -218,3 +218,70 @@ fn a_section_can_come_from_a_tracker_field() {
         String::from_utf8_lossy(&after.stderr)
     );
 }
+
+/// andon-co4: murail states budgets in bd's `estimated_minutes`, not a
+/// Budget section. Mapped in `[goal.fields]`, the number is the goal's
+/// budget, in minutes: check goal passes, and the board and the hook flag a
+/// goal spent past it. Unmapped, the goal has no budget, and check goal
+/// names the fix.
+#[cfg(unix)]
+#[test]
+fn a_budget_can_come_from_a_numeric_tracker_field() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let issue = r###"{"id":"demo-min","title":"t","description":"## Why\n\nbecause\n\n## Done when\n\n`cargo test` passes\n","estimated_minutes":90,"status":"in_progress","assignee":"demo-1a","created_at":"2026-10-13T08:00:00Z","started_at":"2026-10-13T09:00:00Z"}"###;
+    let path = bd_shim(dir.path(), &[issue]);
+    // two hours of the seat's sessions since the claim, from a bridge
+    std::fs::write(
+        dir.path().join("sessions.jsonl"),
+        concat!(
+            r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":"pass","source":"x","attrs":{"covers":["session_active"]}}"#,
+            "\n",
+            r#"{"t":"2026-10-13T10:00:00Z","t_end":"2026-10-13T12:00:00Z","kind":"session_active","actor":"demo-1a","source":"x"}"#,
+            "\n"
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let config = "[project]\ngoal_pattern = '\\bdemo-[a-z0-9]{3}\\b'\n[goal]\n[seats.demo-1a]\n[adapters.bd]\ndir = \".\"\n[[adapters.external]]\nname = \"sessions\"\nfiles = [\"sessions.jsonl\"]\n";
+    std::fs::write(dir.path().join("andon.toml"), config).unwrap_or_else(|e| panic!("{e}"));
+    let unmapped = run(dir.path(), &path, &["check", "goal", "demo-min"]);
+    assert_eq!(unmapped.status.code(), Some(1));
+    assert_eq!(
+        stdout(&unmapped),
+        "refused: demo-min: add a \"## Budget\" section\n"
+    );
+
+    std::fs::write(
+        dir.path().join("andon.toml"),
+        format!("{config}[goal.fields]\n\"Budget\" = \"estimated_minutes\"\n"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mapped = run(dir.path(), &path, &["check", "goal", "demo-min"]);
+    assert_eq!(mapped.status.code(), Some(0), "{}", stdout(&mapped));
+    let board = stdout(&run(dir.path(), &path, &["board"]));
+    assert!(board.contains("120.0/90 min"), "{board}");
+    assert!(board.contains("over budget on demo-min"), "{board}");
+    // the hook's row carries the flag into the seat's turn
+    let seat = dir.path().join("demo-1a");
+    std::fs::create_dir_all(&seat).unwrap_or_else(|e| panic!("{e}"));
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_andon"))
+        .args(["--config", "andon.toml", "hook"])
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("{e}"));
+    if let Some(stdin) = hook.stdin.as_mut() {
+        use std::io::Write;
+        let payload = format!(
+            r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#,
+            seat.display()
+        );
+        stdin
+            .write_all(payload.as_bytes())
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let line = stdout(&hook.wait_with_output().unwrap_or_else(|e| panic!("{e}")));
+    assert!(line.contains("budget 120.0/90 min"), "{line}");
+    assert!(line.contains("⚑ over budget on demo-min"), "{line}");
+}

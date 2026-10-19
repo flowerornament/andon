@@ -385,6 +385,7 @@ fn unit_short(unit: &str) -> &str {
     match unit {
         "agent-hours" => "ah",
         "wall-clock" => "h",
+        "minutes" => "min",
         other => other,
     }
 }
@@ -504,7 +505,7 @@ pub const BOARD: &[Column<Row>] = &[
     },
     Column {
         name: "budget",
-        help: "effort spent since the claim / the effort its `## Budget` section allows (agent-hours, hours, days or runs).",
+        help: "effort spent since the claim / the effort its `## Budget` section allows (agent-hours, hours, minutes, days or runs).",
         cell: budget_cell,
     },
     Column {
