@@ -27,9 +27,10 @@ lint:
 test:
     cargo test --locked --quiet
 
-# Live acceptance: andon's adapters against real projects' stores, from the
-# suites in ~/.config/andon/live.toml (or $ANDON_LIVE). Not part of `check`:
-# another project's stores change under andon.
+# Live smoke test: every adapter the suites in ~/.config/andon/live.toml (or
+# $ANDON_LIVE) configure reads its project's live stores and reports
+# coverage. Not part of `check`: those stores change under andon. The
+# suites' numbers are pinned to kept ledgers, and `check` compares them.
 [group('check')]
 live:
     cargo test --locked --test live -- --ignored --nocapture

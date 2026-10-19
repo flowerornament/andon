@@ -4,6 +4,12 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- Live acceptance is pinned to a kept ledger: each suite in
+  `~/.config/andon/live.toml` names one (`ledger = FILE`, from `andon
+  ledger`), and `cargo test` folds it, so only a change in andon's folds
+  moves a number. `just live` is now a smoke test: every configured
+  adapter reads its live stores and reports coverage.
+
 - A budget can come from a numeric tracker field: `[goal.fields]
   "Budget" = "estimated_minutes"` (the unit from a `_minutes` or `_hours`
   ending), or `{ field = "...", unit = "..." }`. The board, the hook's

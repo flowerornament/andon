@@ -1,29 +1,31 @@
-//! Live acceptance: andon's adapters against a real project's stores.
+//! Acceptance against a real project, in two parts.
 //!
 //! The suites come from a machine-local file, never from this repository
 //! (andon's code knows no project): `$ANDON_LIVE`, else
 //! `~/.config/andon/live.toml`. Each suite names a project's own andon.toml, a
+//! ledger captured from its stores once and kept (`andon ledger > FILE`), a
 //! window, and the scorecard values that window must give:
 //!
 //! ```toml
 //! [[suite]]
 //! name = "a project's study window"
 //! config = "~/path/to/the/project/andon.toml"
+//! ledger = "~/.local/state/andon/acceptance/project-2026-10-19.jsonl"
 //! window = "2026-10-11..2026-10-13T00:30:00Z"
 //! [suite.expect]
 //! "total.landings" = 117
 //! "flow.lead_median_min" = 32.8      # numbers match to 0.05
 //! ```
 //!
-//! Paths are dotted keys into `andon scorecard --json`. A suite may also
-//! declare `[suite.stores]`: what its window's stores held when it was
-//! recorded (runs, sessions). Those are checked first; when they differ, the
-//! stores changed (a desk swept, a receipt deleted) and the values are not
-//! compared, so drift is never reported as an adapter regression.
-//!
-//! Another project's stores change under andon, so this is not part of the
-//! land gate: it is ignored by `cargo test` and run on purpose with
-//! `just live` (at acceptance time).
+//! - **Acceptance** folds the kept ledger and compares every value. The
+//!   ledger never changes, so a value that moves is a change in andon's
+//!   folds, never new data in the stores. It runs with `cargo test`
+//!   wherever the suites file exists, and is skipped elsewhere (CI).
+//! - **The live smoke test** reads each suite's project from its live
+//!   stores and checks only that every configured adapter read and
+//!   reported its coverage. It counts nothing, so stores that grow never
+//!   fail it. It is ignored by `cargo test` and run on purpose with
+//!   `just live`.
 
 #![allow(
     clippy::disallowed_methods,
@@ -32,11 +34,14 @@
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use andon::adapters;
 use andon::config::{Config, expand};
+use andon::event::{Kind, Outcome, attr};
 use andon::fold::scorecard::scorecard;
+use andon::ledger::Ledger;
 use andon::time::Window;
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -52,20 +57,28 @@ struct Suites {
 struct Suite {
     name: String,
     config: String,
+    /// The kept ledger the values are pinned against.
+    #[serde(default)]
+    ledger: Option<String>,
     window: String,
     expect: toml::Table,
-    #[serde(default)]
-    stores: toml::Table,
 }
 
-fn suites_file() -> Option<PathBuf> {
-    match std::env::var("ANDON_LIVE") {
-        Ok(v) if v == "off" => None,
-        Ok(v) => Some(PathBuf::from(v)),
+/// The suites, and the directory their paths resolve against; `None` on a
+/// machine with none.
+fn suites() -> Option<(Vec<Suite>, PathBuf)> {
+    let file = match std::env::var("ANDON_LIVE") {
+        Ok(v) if v == "off" => return None,
+        Ok(v) => PathBuf::from(v),
         Err(_) => std::env::var_os("HOME")
             .map(|h| Path::new(&h).join(".config/andon/live.toml"))
-            .filter(|p| p.is_file()),
-    }
+            .filter(|p| p.is_file())?,
+    };
+    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let suites: Suites =
+        toml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let root = file.parent().unwrap_or(Path::new("/")).to_path_buf();
+    Some((suites.suite, root))
 }
 
 fn at<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
@@ -84,56 +97,35 @@ fn matches(want: &toml::Value, got: Option<&Value>) -> bool {
 }
 
 #[test]
-#[ignore = "reads another project's live stores; run it with `just live`"]
-fn live_suites_reproduce_their_numbers() {
-    let Some(file) = suites_file() else {
-        eprintln!("skipped: no live acceptance suites on this machine (~/.config/andon/live.toml)");
+fn kept_ledgers_reproduce_their_numbers() {
+    let Some((suites, root)) = suites() else {
+        eprintln!("skipped: no acceptance suites on this machine (~/.config/andon/live.toml)");
         return;
     };
-    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let suites: Suites =
-        toml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let root = file.parent().unwrap_or(Path::new("/"));
     let mut failures = Vec::new();
-    // suites over one config share its ledger: read each store once
-    let mut ledgers: std::collections::HashMap<PathBuf, (Config, andon::ledger::Ledger)> =
-        std::collections::HashMap::new();
-    for suite in &suites.suite {
-        let path = expand(&suite.config, root);
-        if !path.is_file() {
+    for suite in &suites {
+        let Some(kept) = &suite.ledger else {
             failures.push(format!(
-                "{}: its config {} is gone",
+                "{}: names no kept ledger; capture one (andon --config {} ledger > FILE) and set ledger = FILE",
+                suite.name, suite.config
+            ));
+            continue;
+        };
+        let (config, ledger) = (expand(&suite.config, &root), expand(kept, &root));
+        if !config.is_file() || !ledger.is_file() {
+            failures.push(format!(
+                "{}: {} or {} is gone",
                 suite.name,
-                path.display()
+                config.display(),
+                ledger.display()
             ));
             continue;
         }
-        let (config, ledger) = ledgers.entry(path.clone()).or_insert_with(|| {
-            let config = common::load(&path);
-            let ledger =
-                adapters::collect(&config).unwrap_or_else(|e| panic!("{}: {e:#}", suite.name));
-            (config, ledger)
-        });
-        let window = Window::parse(&suite.window, Timestamp::now())
+        let config = common::load(&config);
+        let ledger = Ledger::open(&ledger).unwrap_or_else(|e| panic!("{}: {e:#}", suite.name));
+        let window = Window::parse(&suite.window, Timestamp::MAX)
             .unwrap_or_else(|e| panic!("{}: {e}", suite.name));
-        let card = serde_json::to_value(scorecard(ledger, config, window)).unwrap_or_default();
-        let drift: Vec<String> = suite
-            .stores
-            .iter()
-            .filter(|(key, want)| !matches(want, at(&card, key)))
-            .map(|(key, want)| {
-                let got = at(&card, key).map_or_else(|| "absent".to_owned(), ToString::to_string);
-                format!("{key} {want} → {got}")
-            })
-            .collect();
-        if !drift.is_empty() {
-            failures.push(format!(
-                "{}: the stores changed since the suite was recorded, so its values were not compared ({}); re-record the suite",
-                suite.name,
-                drift.join(", ")
-            ));
-            continue;
-        }
+        let card = serde_json::to_value(scorecard(&ledger, &config, window)).unwrap_or_default();
         for (key, want) in &suite.expect {
             let got = at(&card, key);
             if !matches(want, got) {
@@ -145,14 +137,69 @@ fn live_suites_reproduce_their_numbers() {
             }
         }
         eprintln!(
-            "live: {}: {} values checked",
+            "acceptance: {}: {} values checked",
             suite.name,
             suite.expect.len()
         );
     }
-    assert!(
-        failures.is_empty(),
-        "live acceptance:\n{}",
-        failures.join("\n")
-    );
+    assert!(failures.is_empty(), "acceptance:\n{}", failures.join("\n"));
+}
+
+/// The adapters a config turns on, by the name their coverage carries.
+fn configured(config: &Config) -> BTreeSet<String> {
+    let a = &config.adapters;
+    let core = [
+        ("jj", a.jj.is_some()),
+        ("git", a.git.is_some()),
+        ("bd", a.bd.is_some()),
+        ("github", a.github.is_some()),
+        ("ferry", a.ferry.is_some()),
+        ("hail", a.hail.is_some()),
+        ("sessions", a.sessions.is_some()),
+    ];
+    core.into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| name.to_owned())
+        .chain(a.external.iter().map(|e| e.name.clone()))
+        .collect()
+}
+
+#[test]
+#[ignore = "reads another project's live stores; run it with `just live`"]
+fn live_adapters_read_and_report_coverage() {
+    let Some((suites, root)) = suites() else {
+        eprintln!("skipped: no acceptance suites on this machine (~/.config/andon/live.toml)");
+        return;
+    };
+    let configs: BTreeSet<PathBuf> = suites.iter().map(|s| expand(&s.config, &root)).collect();
+    let mut failures = Vec::new();
+    for path in configs {
+        let config = common::load(&path);
+        let ledger = match adapters::collect(&config) {
+            Ok(l) => l,
+            Err(e) => {
+                failures.push(format!("{}: {e:#}", path.display()));
+                continue;
+            }
+        };
+        let reported: BTreeSet<String> = ledger
+            .events()
+            .iter()
+            .filter(|e| e.kind == Kind::Coverage && e.outcome == Some(Outcome::Pass))
+            .filter_map(|e| e.attr_str(attr::ADAPTER).map(str::to_owned))
+            .collect();
+        for name in configured(&config).difference(&reported) {
+            failures.push(format!(
+                "{}: adapter {name} read nothing it could vouch for",
+                path.display()
+            ));
+        }
+        eprintln!(
+            "live: {}: {} adapters read, {} events",
+            path.display(),
+            reported.len(),
+            ledger.len()
+        );
+    }
+    assert!(failures.is_empty(), "live:\n{}", failures.join("\n"));
 }
