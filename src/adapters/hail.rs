@@ -73,9 +73,14 @@ pub fn collect(config: &Config, hc: &HailConfig) -> Result<Vec<Event>> {
                 // in another project's seat, a message matters only if one of
                 // ours sent it: read its headers before the rest
                 if !seat_kept && !messages.contains_key(id) {
-                    let from = header_from(&file);
-                    if !from.as_deref().is_some_and(keep) {
-                        continue;
+                    match header_from(&file) {
+                        Ok(from) if from.as_deref().is_some_and(keep) => {}
+                        Ok(_) => continue,
+                        // whose message it is cannot be told: a gap
+                        Err(why) => {
+                            reads.unreadable.push((file.clone(), why));
+                            continue;
+                        }
                     }
                 }
                 let m = messages.entry(id.to_owned()).or_default();
@@ -115,6 +120,10 @@ pub fn collect(config: &Config, hc: &HailConfig) -> Result<Vec<Event>> {
             continue;
         }
         let Some(e) = message_event(&id, &m, &goal)? else {
+            // no time header, and an id whose year the file cannot date
+            reads
+                .unreadable
+                .push((m.source.clone().into(), "a message with no time".to_owned()));
             continue;
         };
         let sender_kept = e.actor.as_deref().is_some_and(keep);
@@ -153,10 +162,11 @@ fn read_copy(file: &Path, pending: bool, label: &str, m: &mut Message) -> Result
 }
 
 /// The sender label, from the header lines alone.
-fn header_from(file: &Path) -> Option<String> {
+fn header_from(file: &Path) -> Result<Option<String>, String> {
     use std::io::BufRead;
-    let reader = std::io::BufReader::new(std::fs::File::open(file).ok()?);
-    for line in reader.lines().map_while(Result::ok) {
+    let reader = std::io::BufReader::new(std::fs::File::open(file).map_err(|e| e.to_string())?);
+    for line in reader.lines() {
+        let line = line.map_err(|e| e.to_string())?;
         if line.trim().is_empty() {
             break;
         }
@@ -164,10 +174,10 @@ fn header_from(file: &Path) -> Option<String> {
             .strip_prefix("from:")
             .or_else(|| line.strip_prefix("issuer:"))
         {
-            return Some(label(v.trim()));
+            return Ok(Some(label(v.trim())));
         }
     }
-    None
+    Ok(None)
 }
 
 /// `x-2a@%6` → `x-2a`; `y@%405` → `ferry`.

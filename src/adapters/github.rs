@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 
 use crate::adapters::run_tool;
@@ -34,6 +34,10 @@ pub struct Snapshot {
     /// Issue events (`assigned`, `unassigned`), newest first, as the REST API
     /// returns them. Optional: without them a claim is timed by the issue.
     pub events: Vec<Value>,
+    /// Lists a snapshot directory does not hold, or holds unreadable, by
+    /// file (`issues.json`, ...) and why: their kinds are a gap, never an
+    /// empty list (Ferry's policy: one unreadable file, one gap).
+    pub absent: Vec<(String, String)>,
 }
 
 const ISSUE_FIELDS: &str =
@@ -47,7 +51,7 @@ const RUN_FIELDS: &str = "databaseId,headSha,headBranch,conclusion,status,create
 /// When `gh` cannot run (or a snapshot file is unreadable).
 pub fn collect(config: &Config, gc: &GithubConfig) -> Result<Vec<Event>> {
     let snapshot = match &gc.snapshot {
-        Some(dir) => read_snapshot(&config.path(dir))?,
+        Some(dir) => read_snapshot(&config.path(dir)),
         None => fetch(gc)?,
     };
     events(
@@ -85,36 +89,63 @@ fn fetch(gc: &GithubConfig) -> Result<Snapshot> {
     } else {
         Vec::new()
     };
-    let path = format!("repos/{}/issues/events?per_page=100", gc.repo);
-    let events = values(&run_tool("gh", &["api", "-X", "GET", &path], fix)?)?;
+    let request = events_request(&gc.repo);
+    let args: Vec<&str> = request.iter().map(String::as_str).collect();
+    let events = values(&run_tool("gh", &args, fix)?)?;
     Ok(Snapshot {
         issues,
         prs,
         runs,
         events,
+        absent: Vec::new(),
     })
 }
 
-/// Read a snapshot directory; a missing file is an empty list.
-///
-/// # Errors
-/// When a file exists but is not JSON.
-pub fn read_snapshot(dir: &Path) -> Result<Snapshot> {
-    let read = |name: &str| -> Result<Vec<Value>> {
+/// The issue events, every page: a claim whose `assigned` event is on a
+/// later page would otherwise be timed by the issue's creation.
+fn events_request(repo: &str) -> Vec<String> {
+    ["api", "-X", "GET", "--paginate"]
+        .into_iter()
+        .map(str::to_owned)
+        .chain([format!("repos/{repo}/issues/events?per_page=100")])
+        .collect()
+}
+
+/// Read a snapshot directory. A list that is missing, unreadable or not
+/// JSON is recorded as absent, with why (its kinds become a gap);
+/// `events.json` is optional.
+#[must_use]
+pub fn read_snapshot(dir: &Path) -> Snapshot {
+    let mut absent = Vec::new();
+    let mut read = |name: &str| -> Vec<Value> {
         let path = dir.join(name);
-        if !path.is_file() {
-            return Ok(Vec::new());
-        }
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("cannot read {}", path.display()))?;
-        values(&text).with_context(|| format!("{} is not JSON", path.display()))
+        let got = std::fs::read_to_string(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "the snapshot holds none".to_owned()
+                } else {
+                    e.to_string()
+                }
+            })
+            .and_then(|text| values(&text).map_err(|e| format!("not JSON ({e})")));
+        got.unwrap_or_else(|why| {
+            if name != "events.json" || !why.starts_with("the snapshot holds none") {
+                absent.push((name.to_owned(), why));
+            }
+            Vec::new()
+        })
     };
-    Ok(Snapshot {
-        issues: read("issues.json")?,
-        prs: read("prs.json")?,
-        runs: read("runs.json")?,
-        events: read("events.json")?,
-    })
+    let issues = read("issues.json");
+    let prs = read("prs.json");
+    let runs = read("runs.json");
+    let events = read("events.json");
+    Snapshot {
+        issues,
+        prs,
+        runs,
+        events,
+        absent,
+    }
 }
 
 /// One or more JSON arrays (gh pages print one after another), flattened.
@@ -160,13 +191,15 @@ pub fn events(
     }
     let mut out = Vec::new();
     for issue in &s.issues {
-        out.extend(issue_events(issue, gc, &assigned, &who, source, fields)?);
+        out.extend(issue_events(
+            issue, gc, &assigned, &who, source, fields, now,
+        )?);
     }
     for pr in &s.prs {
-        out.extend(pr_events(pr, &who, source)?);
+        out.extend(pr_events(pr, &who, source, now)?);
     }
     for run in &s.runs {
-        out.extend(run_event(run, gc, source)?);
+        out.push(run_event(run, gc, source, now)?);
     }
     // each list is complete unless it came back full (`limit` items): then
     // it covers only from its oldest item
@@ -177,28 +210,55 @@ pub fn events(
         let oldest = items.iter().filter_map(|i| text(i, key)).min();
         oldest.map_or(Ok(crate::event::ALL_HISTORY), parse_instant)
     };
-    out.push(crate::event::coverage(
-        from(&s.issues, "createdAt")?,
-        Some(now),
-        &["create", "claim", "close", "other:comment"],
-        format!("{source} issues"),
-        None,
-    ));
-    out.push(crate::event::coverage(
-        from(&s.prs, "createdAt")?,
-        Some(now),
-        &["verdict", "other:pr"],
-        format!("{source} pull requests"),
-        None,
-    ));
-    if gc.runs {
-        out.push(crate::event::coverage(
-            from(&s.runs, "createdAt")?,
-            Some(now),
-            &["run"],
-            format!("{source} runs"),
+    // (snapshot file, its items, the kinds it holds, its name, whether read)
+    let lists = [
+        (
+            "issues.json",
+            &s.issues,
+            &["create", "claim", "close", "other:comment"][..],
+            "issues",
+            true,
+        ),
+        (
+            "prs.json",
+            &s.prs,
+            &["verdict", "other:pr"][..],
+            "pull requests",
+            true,
+        ),
+        ("runs.json", &s.runs, &["run"][..], "runs", gc.runs),
+    ];
+    // the issue events time claims: unreadable ones leave claims untimed
+    if let Some((file, why)) = s.absent.iter().find(|(a, _)| a == "events.json") {
+        out.push(crate::event::gap(
+            now,
+            &["claim"],
+            format!("{source} issue events"),
             None,
+            format!("{source}: {file}: {why}"),
         ));
+    }
+    for (file, items, kinds, what, read) in lists {
+        if !read {
+            continue;
+        }
+        if let Some((_, why)) = s.absent.iter().find(|(a, _)| a == file) {
+            out.push(crate::event::gap(
+                now,
+                kinds,
+                format!("{source} {what}"),
+                None,
+                format!("{source}: {file}: {why}"),
+            ));
+        } else {
+            out.push(crate::event::coverage(
+                from(items, "createdAt")?,
+                Some(now),
+                kinds,
+                format!("{source} {what}"),
+                None,
+            ));
+        }
     }
     Ok(out)
 }
@@ -214,9 +274,12 @@ fn issue_events(
     who: &dyn Fn(Option<&str>) -> Option<String>,
     source: &str,
     fields: &std::collections::BTreeMap<String, String>,
+    now: jiff::Timestamp,
 ) -> Result<Vec<Event>> {
+    const ISSUE: &[&str] = &["create", "claim", "close", "other:comment"];
     let mut out = Vec::new();
     let Some(n) = issue["number"].as_i64() else {
+        out.push(unplaced(now, ISSUE, source, "an issue has no number"));
         return Ok(out);
     };
     if let Some(label) = &gc.goal_label {
@@ -238,6 +301,12 @@ fn issue_events(
         Ok(e)
     };
     let Some(created) = text(issue, "createdAt") else {
+        out.push(unplaced(
+            now,
+            ISSUE,
+            source,
+            &format!("issue {id} has no creation time"),
+        ));
         return Ok(out);
     };
     let mut create = item(created, Kind::Create)?;
@@ -258,6 +327,12 @@ fn issue_events(
     let closed = text(issue, "state").is_some_and(|s| s.eq_ignore_ascii_case("closed"));
     for a in issue["assignees"].as_array().into_iter().flatten().take(1) {
         let Some(login) = a["login"].as_str() else {
+            out.push(unplaced(
+                now,
+                &["claim"],
+                source,
+                &format!("an assignee of issue {id} has no login"),
+            ));
             continue;
         };
         let t = assigned
@@ -268,11 +343,25 @@ fn issue_events(
         claim.set_attr(attr::ASSIGNEE, login.to_owned());
         out.push(claim);
     }
-    if closed && let Some(t) = text(issue, "closedAt") {
-        out.push(item(t, Kind::Close)?);
+    if closed {
+        match text(issue, "closedAt") {
+            Some(t) => out.push(item(t, Kind::Close)?),
+            None => out.push(unplaced(
+                now,
+                &["close"],
+                source,
+                &format!("closed issue {id} has no close time"),
+            )),
+        }
     }
     for c in issue["comments"].as_array().into_iter().flatten() {
         let Some(t) = text(c, "createdAt") else {
+            out.push(unplaced(
+                now,
+                &["other:comment"],
+                source,
+                &format!("a comment on issue {id} has no time"),
+            ));
             continue;
         };
         let mut e = item(t, Kind::Other("other:comment".into()))?;
@@ -287,9 +376,16 @@ fn pr_events(
     pr: &Value,
     who: &dyn Fn(Option<&str>) -> Option<String>,
     source: &str,
+    now: jiff::Timestamp,
 ) -> Result<Vec<Event>> {
     let mut out = Vec::new();
     let (Some(n), Some(created)) = (pr["number"].as_i64(), text(pr, "createdAt")) else {
+        out.push(unplaced(
+            now,
+            &["verdict", "other:pr"],
+            source,
+            "a pull request has no number or creation time",
+        ));
         return Ok(out);
     };
     let change = format!("pr#{n}");
@@ -326,6 +422,7 @@ fn pr_events(
     );
     out.push(opened);
     for r in pr["reviews"].as_array().into_iter().flatten() {
+        // a review not yet submitted (pending) has no time and no verdict
         let Some(t) = text(r, "submittedAt") else {
             continue;
         };
@@ -358,9 +455,26 @@ fn pr_events(
     Ok(out)
 }
 
-fn run_event(run: &Value, gc: &GithubConfig, source: &str) -> Result<Option<Event>> {
+/// An item the adapter cannot place in time: a gap in its kinds, never a
+/// quietly shorter list.
+fn unplaced(now: jiff::Timestamp, kinds: &[&str], source: &str, what: &str) -> Event {
+    crate::event::gap(
+        now,
+        kinds,
+        source.to_owned(),
+        None,
+        format!("{source}: {what}"),
+    )
+}
+
+fn run_event(run: &Value, gc: &GithubConfig, source: &str, now: jiff::Timestamp) -> Result<Event> {
     let Some(t) = text(run, "createdAt") else {
-        return Ok(None);
+        return Ok(unplaced(
+            now,
+            &["run"],
+            source,
+            "a run has no creation time",
+        ));
     };
     let mut e = Event::new(parse_instant(t)?, Kind::Run, format!("{source} run"));
     if text(run, "status") == Some("completed")
@@ -399,7 +513,7 @@ fn run_event(run: &Value, gc: &GithubConfig, source: &str) -> Result<Option<Even
             text(run, "url").unwrap_or("logs kept by GitHub").to_owned(),
         );
     }
-    Ok(Some(e))
+    Ok(e)
 }
 
 #[cfg(test)]
@@ -435,6 +549,7 @@ mod tests {
             events: v(
                 r#"[{"event":"assigned","issue":{"number":3},"assignee":{"login":"octo-bot"},"created_at":"2026-10-13T09:00:00Z"}]"#,
             ),
+            absent: Vec::new(),
         }
     }
 
@@ -526,5 +641,10 @@ mod tests {
             values("[1,2][3]").unwrap_or_else(|e| panic!("{e}")).len(),
             3
         );
+    }
+
+    #[test]
+    fn issue_events_are_read_to_the_last_page() {
+        assert!(events_request("o/r").iter().any(|a| a == "--paginate"));
     }
 }

@@ -265,6 +265,55 @@ fn jj_covers_from_its_since() {
     );
     assert_eq!(starts(&l, "land"), vec![at("2026-10-12T00:00:00Z")]);
     assert_eq!(starts(&l, "commit"), vec![at("2026-10-12T00:00:00Z")]);
+    // jj vouches only for kinds it emits: it never records a freeze
+    assert_eq!(starts(&l, "freeze"), Vec::<Timestamp>::new());
+}
+
+#[test]
+fn jj_reads_the_newest_of_divergent_operations_and_merges_nothing() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap_or_else(|e| panic!("{e}"));
+    if !jj(&repo, &["git", "init"]) || !jj(&repo, &["bookmark", "create", "main", "-r", "@"]) {
+        eprintln!("skipped: jj is not available here");
+        return;
+    }
+    let op = |repo: &Path| {
+        let out = Command::new("jj")
+            .args(["op", "log", "-n1", "--no-graph", "-T", "id"])
+            .current_dir(repo)
+            .env("JJ_CONFIG", "/dev/null")
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let base = op(&repo);
+    // two writers from one operation: two heads, as concurrent agents leave
+    assert!(jj(&repo, &["describe", "-m", "x: one (x-a)"]));
+    assert!(jj(
+        &repo,
+        &[
+            "--at-op",
+            &base,
+            "--ignore-working-copy",
+            "describe",
+            "-m",
+            "x: two (x-b)"
+        ]
+    ));
+    let heads = || {
+        std::fs::read_dir(repo.join(".jj/repo/op_heads/heads"))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .count()
+    };
+    assert_eq!(heads(), 2, "the fixture did not diverge");
+    let l = read(
+        dir.path(),
+        "[adapters.jj]\nrepo = \"repo\"\ntrunk = \"main\"\n",
+    );
+    // the read chose one head and wrote nothing: both heads stand
+    assert_eq!(heads(), 2, "andon merged the operation heads");
+    assert_eq!(starts(&l, "land"), vec![andon::event::ALL_HISTORY]);
 }
 
 /// `andon ledger` over `config`, run in `tz`: the zone reaches jj and git.

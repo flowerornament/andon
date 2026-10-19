@@ -26,6 +26,9 @@ struct Gap {
     covers: Vec<String>,
     seat: Option<String>,
     reason: String,
+    /// The instant the unreadable fact was at, when the store said
+    /// (`event::gap_at`); `None` stands over every span.
+    at: Option<Timestamp>,
 }
 
 /// What the ledger covers.
@@ -57,6 +60,7 @@ impl Coverage {
                 Some(Outcome::Fail) => c.gaps.push(Gap {
                     covers,
                     seat: scope(e),
+                    at: (e.t_end == Some(e.t)).then_some(e.t),
                     reason: e
                         .attr_str(attr::GAP_REASON)
                         .unwrap_or("unreadable")
@@ -158,6 +162,7 @@ impl Coverage {
             .iter()
             .filter(|g| {
                 g.covers.iter().any(|c| c == kind)
+                    && g.at.is_none_or(|at| from <= at && at <= to)
                     && match (&g.seat, seat) {
                         (None, _) | (_, None) => true,
                         (Some(scoped), Some(seat)) => scoped == seat,
@@ -267,7 +272,7 @@ pub fn noun(kind: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{coverage, gap};
+    use crate::event::{coverage, gap, gap_at};
     use crate::time::parse_instant;
 
     fn at(s: &str) -> Timestamp {
@@ -392,6 +397,44 @@ mod tests {
             )
             .as_deref(),
             Some("1 sessions source could not be read: x.jsonl: permission denied")
+        );
+    }
+
+    #[test]
+    fn a_gap_at_an_instant_stands_only_over_spans_that_hold_it() {
+        let c = cov(vec![
+            coverage(crate::event::ALL_HISTORY, None, &["verdict"], "bd", None),
+            gap_at(
+                at("2026-10-15T05:00:00Z"),
+                &["verdict"],
+                "bd",
+                None,
+                "not JSON",
+            ),
+        ]);
+        let check = |from: &str, to: &str| c.check(&["verdict"], None, at(from), at(to));
+        assert!(check("2026-10-15T00:00:00Z", "2026-10-16T00:00:00Z").is_some());
+        assert_eq!(check("2026-10-16T00:00:00Z", "2026-10-17T00:00:00Z"), None);
+        assert_eq!(check("2026-10-14T00:00:00Z", "2026-10-15T04:59:59Z"), None);
+        // a gap with no known time stands over every span
+        let c = cov(vec![
+            coverage(crate::event::ALL_HISTORY, None, &["verdict"], "bd", None),
+            gap(
+                at("2026-10-15T05:00:00Z"),
+                &["verdict"],
+                "bd",
+                None,
+                "unreadable",
+            ),
+        ]);
+        assert!(
+            c.check(
+                &["verdict"],
+                None,
+                at("2026-10-16T00:00:00Z"),
+                at("2026-10-17T00:00:00Z")
+            )
+            .is_some()
         );
     }
 }

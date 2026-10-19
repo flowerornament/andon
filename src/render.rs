@@ -382,8 +382,9 @@ pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
                     (Some(amount), Some(unit)) => {
                         format!("{used:.1}/{amount:.0} {}", unit_short(unit))
                     }
-                    // the goal states no amount: show what was spent
-                    _ => format!("{used:.1} ah"),
+                    // the goal states no amount: show what was spent, in
+                    // the unit it was counted in
+                    _ => format!("{used:.1} {}", unit_short(&g.used_unit)),
                 })
             },
         ),
@@ -438,9 +439,7 @@ pub fn board(board: &Board) -> String {
         let _ = writeln!(
             out,
             "\n{} is claimed by '{}', which is not a seat; {}",
-            u.goal,
-            u.owner,
-            crate::seat::identity_hint_any(&u.goal)
+            u.goal, u.owner, u.fix
         );
     }
     let entries = row_reasons(board);

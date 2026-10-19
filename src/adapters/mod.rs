@@ -18,6 +18,11 @@ use crate::event::attr;
 use crate::ledger::Ledger;
 use crate::seat::Resolver;
 
+/// The core adapters, by the name each one's coverage carries
+/// (`attrs.adapter`). `tests/contract.rs` holds a corrupt-input case for
+/// each, and for `external`.
+pub const CORE: &[&str] = &["jj", "git", "bd", "github", "ferry", "hail", "sessions"];
+
 /// Run every configured adapter, resolve seats, and build the ledger.
 ///
 /// # Errors
@@ -96,6 +101,11 @@ fn run_adapters(
             Box::new(move || external::collect(config, c)),
         ));
     }
+    debug_assert!(
+        jobs.iter()
+            .all(|(name, _)| CORE.contains(&name.as_str()) || name.starts_with("external ")),
+        "an adapter missing from CORE has no contract case"
+    );
     // adapters read independent sources: run them at once; the ledger's sort
     // makes the result independent of which finishes first
     let trace = std::env::var_os("ANDON_TRACE").is_some();

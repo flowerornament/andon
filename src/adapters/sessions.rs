@@ -264,17 +264,34 @@ fn lines(file: &Path, since: Option<Timestamp>, needles: &[&str]) -> Result<Vec<
     let mut reader = BufReader::with_capacity(1 << 20, f);
     let mut buf = Vec::new();
     // skip the first line (yielded above) or the partial line the seek landed in
-    let _ = reader.read_until(b'\n', &mut buf);
+    let skipped = reader
+        .read_until(b'\n', &mut buf)
+        .map_err(|e| e.to_string())?;
+    let mut malformed = None;
+    let mut offset = start + skipped as u64;
     loop {
         buf.clear();
-        match reader.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
+        // a read error loses the rest of the transcript: the reader says so
+        if reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            break;
         }
+        // only the last line may be malformed: it is being written
+        if let Some(line) = malformed.take() {
+            return Err(format!("a line {line} bytes in is not JSON"));
+        }
+        let at = offset;
+        offset += buf.len() as u64;
         let wanted = finders.iter().any(|f| f.find(&buf).is_some());
-        // a single malformed line is skipped: transcripts are written live
-        if wanted && let Ok(v) = serde_json::from_slice::<Value>(&buf) {
-            out.push(v);
+        if wanted {
+            match serde_json::from_slice::<Value>(&buf) {
+                Ok(v) => out.push(v),
+                Err(_) if buf.ends_with(b"\n") => malformed = Some(at),
+                Err(_) => {}
+            }
         }
     }
     Ok(out)
@@ -313,9 +330,12 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
                 t.session = Some(format!("agent-{agent}"));
             }
         }
-        let Some(ts) = o["timestamp"].as_str().and_then(|s| parse_instant(s).ok()) else {
+        // a line with no time is not a turn (a summary, a header); a time
+        // that does not parse is a transcript andon cannot read
+        let Some(ts) = o["timestamp"].as_str() else {
             continue;
         };
+        let ts = parse_instant(ts).map_err(|e| format!("a turn's time {ts:?}: {e}"))?;
         if let Some(cwd) = o["cwd"].as_str() {
             *t.cwd.entry(cwd.to_owned()).or_default() += 1;
         }
@@ -397,9 +417,12 @@ pub fn codex(
     let needles = ["\"function_call\"", "\"custom_tool_call\""];
     for o in lines(file, since, &needles)?.into_iter().skip(1) {
         let payload = &o["payload"];
-        let Some(ts) = o["timestamp"].as_str().and_then(|s| parse_instant(s).ok()) else {
+        // a line with no time is not a turn (a summary, a header); a time
+        // that does not parse is a transcript andon cannot read
+        let Some(ts) = o["timestamp"].as_str() else {
             continue;
         };
+        let ts = parse_instant(ts).map_err(|e| format!("a turn's time {ts:?}: {e}"))?;
         let kind = payload["type"].as_str().unwrap_or_default();
         if matches!(kind, "function_call" | "custom_tool_call") {
             t.calls.push(ts);

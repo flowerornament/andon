@@ -377,6 +377,22 @@ pub fn gap(
     e
 }
 
+/// A gap at one instant: a fact the store held at `at`, unreadable. It
+/// stands only over spans that hold `at` (a span of one instant, as a
+/// current-state read is); a gap with no known time stands everywhere.
+#[must_use]
+pub fn gap_at(
+    at: Timestamp,
+    covers: &[&str],
+    source: impl Into<String>,
+    seat: Option<&str>,
+    reason: impl Into<String>,
+) -> Event {
+    let mut e = gap(at, covers, source, seat, reason);
+    e.t_end = Some(at);
+    e
+}
+
 /// One fact from one artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Event {

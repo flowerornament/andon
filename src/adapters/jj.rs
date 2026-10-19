@@ -105,13 +105,7 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
     out.push(crate::event::coverage(
         since.unwrap_or(crate::event::ALL_HISTORY),
         Some(config.capture()),
-        &[
-            "land",
-            "commit",
-            "freeze",
-            "other:desk_create",
-            "other:desk_remove",
-        ],
+        &["land", "commit", "other:desk_create", "other:desk_remove"],
         source,
         None,
     ));
@@ -197,44 +191,48 @@ fn jj(repo: &Repo<'_>, args: &[&str]) -> Result<String> {
     run_tool("jj", &full, FIX)
 }
 
-/// The operation to read at: `@`, or when concurrent writers left several
-/// heads (jj would merge them, recording an operation), the newest head.
+/// The operation to read at: the repository's one operation head, or when
+/// concurrent writers left several (jj would merge them, recording an
+/// operation), the newest. Read from the store, never from jj's wording.
 fn operation(dir: &Path) -> Result<String> {
-    let path = dir.to_string_lossy().into_owned();
-    let read = |op: &str, args: &[&str]| -> Result<String> {
-        let mut full = vec![
-            "--ignore-working-copy",
-            "--at-op",
-            op,
-            "--no-pager",
-            "-R",
-            path.as_str(),
-        ];
-        full.extend_from_slice(args);
-        run_tool("jj", &full, FIX)
-    };
-    match read("@", &["op", "log", "-n1", "--no-graph", "-T", "id"]) {
-        Ok(id) => Ok(id.trim().to_owned()),
-        Err(error) if error.to_string().contains("more than one operation") => {
-            let mut newest: Option<(Timestamp, String)> = None;
-            for head in op_heads(dir)? {
-                let json = read(
-                    &head,
-                    &["op", "log", "-n1", "--no-graph", "-T", "json(self)"],
-                )?;
-                let op: JjOp = serde_json::from_str(json.trim())
-                    .context("jj op log printed something other than an operation")?;
-                let t = parse_instant(&op.time.start)?;
-                if newest.as_ref().is_none_or(|(n, _)| t > *n) {
-                    newest = Some((t, head));
-                }
-            }
-            newest.map(|(_, id)| id).ok_or_else(|| {
-                anyhow::anyhow!("jj reports divergent operations but lists no heads")
-            })
-        }
-        Err(error) => Err(error),
+    let heads = op_heads(dir)?;
+    if let [head] = heads.as_slice() {
+        return Ok(head.clone());
     }
+    let path = dir.to_string_lossy().into_owned();
+    let mut newest: Option<(Timestamp, String)> = None;
+    for head in heads {
+        let json = run_tool(
+            "jj",
+            &[
+                "--ignore-working-copy",
+                "--at-op",
+                &head,
+                "--no-pager",
+                "-R",
+                path.as_str(),
+                "op",
+                "log",
+                "-n1",
+                "--no-graph",
+                "-T",
+                "json(self)",
+            ],
+            FIX,
+        )?;
+        let op: JjOp = serde_json::from_str(json.trim())
+            .context("jj op log printed something other than an operation")?;
+        let t = parse_instant(&op.time.start)?;
+        if newest.as_ref().is_none_or(|(n, _)| t > *n) {
+            newest = Some((t, head));
+        }
+    }
+    newest.map(|(_, id)| id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no operation heads; is it a jj repository?",
+            dir.display()
+        )
+    })
 }
 
 /// The operation heads, from the repository's store (a secondary
@@ -244,21 +242,16 @@ fn op_heads(dir: &Path) -> Result<Vec<String>> {
         .ancestors()
         .find(|d| d.join(".jj").exists())
         .ok_or_else(|| anyhow::anyhow!("{} is not in a jj repository", dir.display()))?;
-    let mut store = root.join(".jj").join("repo");
-    if store.is_file() {
-        let target = std::fs::read_to_string(&store)?;
-        let target = Path::new(target.trim());
-        store = if target.is_absolute() {
-            target.to_path_buf()
-        } else {
-            root.join(".jj").join(target)
-        };
+    let store = store(root)
+        .ok_or_else(|| anyhow::anyhow!("cannot read the jj store of {}", root.display()))?;
+    let listed = std::fs::read_dir(store.join("op_heads").join("heads"))
+        .with_context(|| format!("cannot list operation heads in {}", store.display()))?;
+    let mut heads = Vec::new();
+    for entry in listed {
+        let entry =
+            entry.with_context(|| format!("cannot list operation heads in {}", store.display()))?;
+        heads.push(entry.file_name().to_string_lossy().into_owned());
     }
-    let mut heads: Vec<String> = std::fs::read_dir(store.join("op_heads").join("heads"))
-        .with_context(|| format!("cannot list operation heads in {}", store.display()))?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
     heads.sort();
     Ok(heads)
 }

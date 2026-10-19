@@ -98,6 +98,14 @@ pub fn issue_events(
 ) -> Result<Vec<Event>> {
     let mut out = Vec::new();
     let Some(id) = text(issue, "id") else {
+        // an issue andon cannot name: its goal, claim and close are unknown
+        out.push(crate::event::gap(
+            config.capture(),
+            &["create", "state:create", "state:claim", "state:close"],
+            source.to_owned(),
+            None,
+            format!("{source}: an issue has no id"),
+        ));
         return Ok(out);
     };
     let at = |key: &str| text(issue, key).map(parse_instant).transpose();
@@ -165,9 +173,7 @@ pub fn issue_events(
     }
 
     for comment in issue["comments"].as_array().into_iter().flatten() {
-        if let Some(e) = comment_event(comment, id, bc, source)? {
-            out.push(e);
-        }
+        out.push(comment_event(comment, id, bc, source, config.capture())?);
     }
     Ok(out)
 }
@@ -196,11 +202,29 @@ fn comment_event(
     issue: &str,
     bc: &BdConfig,
     source: &str,
-) -> Result<Option<Event>> {
-    let Some(t) = text(comment, "created_at") else {
-        return Ok(None);
-    };
+    now: jiff::Timestamp,
+) -> Result<Event> {
     let body = text(comment, "text").unwrap_or_default();
+    let verdict_like = bc
+        .verdicts
+        .as_ref()
+        .is_some_and(|f| body.trim_start().starts_with(f.prefix.as_str()));
+    let Some(t) = text(comment, "created_at") else {
+        // a comment with no time cannot be placed: findings (and verdicts,
+        // if it is one) are unknown, never quietly fewer
+        let covers: &[&str] = if verdict_like {
+            &["other:comment", "verdict"]
+        } else {
+            &["other:comment"]
+        };
+        return Ok(crate::event::gap(
+            now,
+            covers,
+            source.to_owned(),
+            None,
+            format!("{source}: a comment on {issue} has no time"),
+        ));
+    };
     let mut e = Event::new(
         parse_instant(t)?,
         Kind::Other("other:comment".into()),
@@ -210,14 +234,22 @@ fn comment_event(
     e.ids.goal = Some(issue.to_owned());
     e.actor = text(comment, "author").map(str::to_owned);
     let id = text(comment, "id").map(str::to_owned);
-    let verdict = bc.verdicts.as_ref().and_then(|format| {
-        let rest = body.trim_start().strip_prefix(format.prefix.as_str())?;
-        let v = serde_json::Deserializer::from_str(rest.trim_start())
-            .into_iter::<Value>()
-            .next()?
-            .ok()?;
-        Some((format, v))
-    });
+    let verdict = match bc.verdicts.as_ref() {
+        Some(format) if verdict_like => {
+            let rest = body.trim_start()[format.prefix.len()..].trim_start();
+            match serde_json::Deserializer::from_str(rest)
+                .into_iter::<Value>()
+                .next()
+            {
+                Some(Ok(v)) => Some((format, v)),
+                // a verdict andon cannot read is a gap in verdicts, never an
+                // ordinary comment
+                Some(Err(why)) => return unreadable_verdict(t, source, issue, &why.to_string()),
+                None => return unreadable_verdict(t, source, issue, "no JSON after the prefix"),
+            }
+        }
+        _ => None,
+    };
     if let Some((format, v)) = verdict {
         e.kind = Kind::Verdict;
         // the comment's author gave the verdict; it is on the reviewed
@@ -258,11 +290,24 @@ fn comment_event(
             }
             _ => Outcome::Unknown,
         });
-        return Ok(Some(e));
+        return Ok(e);
     }
     e.ids.verdict = None;
     e.set_attr(attr::COMMENT, id.unwrap_or_default());
-    Ok(Some(e))
+    Ok(e)
+}
+
+/// A comment that starts as a verdict but cannot be read as one.
+/// Its time is known, so it stands only over spans that hold it: a comment
+/// cannot be edited, and a gap at no time would hide every verdict forever.
+fn unreadable_verdict(t: &str, source: &str, issue: &str, why: &str) -> Result<Event> {
+    Ok(crate::event::gap_at(
+        parse_instant(t)?,
+        &["verdict"],
+        source.to_owned(),
+        None,
+        format!("{source}: a verdict on {issue} is not JSON ({why})"),
+    ))
 }
 
 /// A dotted path into a JSON object: `critic.session`.

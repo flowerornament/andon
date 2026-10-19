@@ -46,19 +46,6 @@ impl Answer {
     }
 }
 
-/// How to claim a goal in this project's tracker, for the fix line.
-#[must_use]
-pub fn claim_hint(config: &Config, id: &str) -> String {
-    if config.adapters.github.is_some() {
-        format!(
-            "gh issue edit {} --add-assignee @me",
-            id.trim_start_matches('#')
-        )
-    } else {
-        format!("bd update {id} --claim")
-    }
-}
-
 /// `check commit`: the commit cites a goal its seat holds, within WIP.
 #[must_use]
 pub fn commit(commit: &Commit, ledger: &Ledger, config: &Config, now: Timestamp) -> Answer {
@@ -135,7 +122,7 @@ fn held_by(item: &Item, goal: &str, seat: &str, config: &Config) -> Option<Strin
         )),
         _ => Some(format!(
             "{goal} is not claimed; claim it: {}",
-            claim_hint(config, goal)
+            crate::seat::claim_hint(config, goal)
         )),
     }
 }
@@ -276,7 +263,7 @@ mod tests {
     fn config(extra: &str) -> Config {
         Config::parse(
             &format!(
-                "[project]\ngoal_pattern = '\\bandon-[a-z0-9]{{3}}\\b'\n[seats.andon-1a]\n[seats.andon-1b]\n{extra}"
+                "[project]\ngoal_pattern = '\\bandon-[a-z0-9]{{3}}\\b'\n[seats.andon-1a]\n[seats.andon-1b]\n[adapters.bd]\ndir = \".\"\n{extra}"
             ),
             Path::new("/"),
         )

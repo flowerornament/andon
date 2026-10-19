@@ -11,6 +11,17 @@ All notable changes to `andon` are documented in this file.
   `logs`; a kept ledger or an adapter that writes `reason` is still read.
   Kept trailers (`adapters.jj.trailers.keep`) move under `attrs.trailers`.
   Board, scorecard and asof output is unchanged.
+- No adapter drops input silently. A malformed bd verdict, a dateless
+  comment or issue, a missing or unreadable GitHub snapshot list, an
+  unreadable hail header, and a transcript read error or mid-file
+  malformed line are each a gap, so the gauges that read them show `?`
+  with the reason. A gap whose time is known (an unreadable verdict)
+  stands only over the spans that hold it. GitHub issue events are read
+  to the last page. `tests/contract.rs` holds every adapter to this.
+- jj reads its operation from the store's op heads, and no longer claims
+  coverage of `freeze`.
+- A budget with no amount renders in its own unit, and a project without
+  bd is never given a bd command in a fix line.
 
 ## v0.2.0 - 2026-10-14
 

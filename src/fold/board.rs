@@ -37,6 +37,10 @@ pub struct Board {
 pub struct Unseated {
     pub goal: String,
     pub owner: String,
+    /// How to make the tracker record a seat instead, in this project's
+    /// tracker: the note's fix, not a fact, so not in the output.
+    #[serde(skip)]
+    pub fix: String,
 }
 
 /// One seat. Every gauge is a [`Gauge`]: known, or unknown with the reason
@@ -81,6 +85,9 @@ pub struct Goal {
     /// Whether it counts toward WIP (`[goal] types`; an epic does not).
     #[serde(skip)]
     pub counts: bool,
+    /// The unit `used` is in: the budget's, else `[board] budget_unit`.
+    #[serde(skip)]
+    pub used_unit: String,
     /// The seat's latest commit or landing that cites this goal, as read:
     /// only the key that puts the goal being worked first, not a gauge, so
     /// not in the output.
@@ -175,6 +182,7 @@ pub fn board(ledger: &Ledger, config: &Config, asof: Timestamp) -> Board {
                 (!config.seats.contains_key(owner)).then(|| Unseated {
                     goal: goal.clone(),
                     owner: owner.to_owned(),
+                    fix: crate::seat::identity_hint_any(config, goal),
                 })
             })
             .collect()
@@ -338,6 +346,7 @@ fn goals(
                 claimed_at: item.claimed_at,
                 budget: item.budget.clone(),
                 counts: item.in_progress(config),
+                used_unit: unit_read.to_owned(),
                 amount,
                 unit,
                 used,
@@ -675,8 +684,13 @@ mod tests {
             ),
             covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
         ];
-        let ledger = adapters::resolve(&config(), events);
-        let b = board(&ledger, &config(), at("2026-10-13T12:00:00Z"));
+        let bd = Config::parse(
+            "[seats.x-1a]\n[seats.x-1b]\n[adapters.bd]\ndir = \".\"\n",
+            Path::new("/"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let ledger = adapters::resolve(&bd, events.clone());
+        let b = board(&ledger, &bd, at("2026-10-13T12:00:00Z"));
         let unseated = b.unseated.get().cloned().unwrap_or_default();
         assert_eq!(unseated.len(), 1);
         assert_eq!(
@@ -688,5 +702,35 @@ mod tests {
             text.contains("x-shared is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=<seat> or bd update x-shared --assignee <seat>"),
             "{text}"
         );
+        // a project with no bd is never told to run bd
+        let ledger = adapters::resolve(&config(), events);
+        let text = crate::render::board(&board(&ledger, &config(), at("2026-10-13T12:00:00Z")));
+        assert!(
+            !text.contains("bd ") && !text.contains("BEADS_ACTOR"),
+            "{text}"
+        );
+        assert!(text.contains("make the tracker record <seat>"), "{text}");
+    }
+
+    #[test]
+    fn a_budget_with_no_amount_renders_in_the_unit_it_was_counted_in() {
+        let runs = Config::parse(
+            "[seats.x-1a]\n[board]\nbudget_unit = \"runs\"\n",
+            Path::new("/"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut create = event("2026-10-13T07:00:00Z", Kind::Create, "x-1a", Some("x-g"));
+        create.set_attr(crate::event::attr::BUDGET, "small");
+        let events = vec![
+            create,
+            event("2026-10-13T08:00:00Z", Kind::Claim, "x-1a", Some("x-g")),
+            event("2026-10-13T09:00:00Z", Kind::Run, "x-1a", None),
+            event("2026-10-13T10:00:00Z", Kind::Run, "x-1a", None),
+            covered("1970-01-01T00:00:00Z", &["create", "claim", "close", "run"]),
+        ];
+        let ledger = adapters::resolve(&runs, events);
+        let b = board(&ledger, &runs, at("2026-10-13T12:00:00Z"));
+        let row = crate::render::board_row(&b.seats[0], b.asof);
+        assert_eq!(row[2], "2.0 runs", "{row:?}");
     }
 }

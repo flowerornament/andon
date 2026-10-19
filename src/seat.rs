@@ -251,24 +251,60 @@ fn most(counts: &BTreeMap<String, usize>) -> Option<String> {
     best.map(|(k, _)| k.clone())
 }
 
+/// The tracker a project's fix lines name: the one its config reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tracker {
+    Github,
+    Bd,
+    /// No core tracker (an external adapter's, or none): name no command.
+    Other,
+}
+
+impl Tracker {
+    #[must_use]
+    pub const fn of(config: &Config) -> Self {
+        if config.adapters.github.is_some() {
+            Self::Github
+        } else if config.adapters.bd.is_some() {
+            Self::Bd
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// How to claim a goal in this project's tracker, for the fix line.
+#[must_use]
+pub fn claim_hint(config: &Config, id: &str) -> String {
+    match Tracker::of(config) {
+        Tracker::Github => format!(
+            "gh issue edit {} --add-assignee @me",
+            id.trim_start_matches('#')
+        ),
+        Tracker::Bd => format!("bd update {id} --claim"),
+        Tracker::Other => format!("claim {id} in the tracker"),
+    }
+}
+
 /// How a seat makes the tracker record it, not a shared identity.
 #[must_use]
 pub fn identity_hint(config: &Config, id: &str, seat: &str) -> String {
-    if config.adapters.github.is_some() {
-        format!(
-            "assign #{} to the account {seat} is known by: gh issue edit {} --add-assignee <login>",
-            id.trim_start_matches('#'),
-            id.trim_start_matches('#')
-        )
-    } else {
-        format!("set BEADS_ACTOR={seat} or bd update {id} --assignee {seat}")
+    let n = id.trim_start_matches('#');
+    match Tracker::of(config) {
+        Tracker::Github => format!(
+            "assign #{n} to the account {seat} is known by: gh issue edit {n} --add-assignee <login>"
+        ),
+        Tracker::Bd => format!("set BEADS_ACTOR={seat} or bd update {id} --assignee {seat}"),
+        Tracker::Other => {
+            format!("make the tracker record {seat}, by a name [seats] lists, as {id}'s assignee")
+        }
     }
 }
 
 /// [`identity_hint`] for no seat in particular (the board's note).
 #[must_use]
-pub fn identity_hint_any(id: &str) -> String {
-    format!("set BEADS_ACTOR=<seat> or bd update {id} --assignee <seat>")
+pub fn identity_hint_any(config: &Config, id: &str) -> String {
+    identity_hint(config, id, "<seat>")
 }
 
 #[cfg(test)]
@@ -336,5 +372,30 @@ aliases = ["1b-bot"]
     fn with_no_seats_configured_each_actor_is_a_seat() {
         let r = Resolver::new(&Config::default());
         assert_eq!(r.label("andon-1b").as_deref(), Some("andon-1b"));
+    }
+
+    #[test]
+    fn fix_lines_name_the_tracker_the_project_reads() {
+        let with = |extra: &str| {
+            Config::parse(&format!("[seats.x-1a]\n{extra}"), Path::new("/"))
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        let bd = with("[adapters.bd]\ndir = \".\"\n");
+        let gh = with("[adapters.github]\nrepo = \"o/r\"\n");
+        let none = with("");
+        assert_eq!(claim_hint(&bd, "x-g"), "bd update x-g --claim");
+        assert_eq!(claim_hint(&gh, "#4"), "gh issue edit 4 --add-assignee @me");
+        assert_eq!(claim_hint(&none, "x-g"), "claim x-g in the tracker");
+        assert!(identity_hint_any(&gh, "#4").starts_with("assign #4"));
+        for hint in [
+            claim_hint(&none, "x-g"),
+            identity_hint(&none, "x-g", "x-1a"),
+            identity_hint_any(&none, "x-g"),
+        ] {
+            assert!(
+                !hint.contains("bd ") && !hint.contains("BEADS_ACTOR"),
+                "{hint}"
+            );
+        }
     }
 }
