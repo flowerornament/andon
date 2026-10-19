@@ -39,7 +39,7 @@ pub fn collect(config: &Config, hc: &HailConfig) -> Result<Vec<Event>> {
     let goal = config.goal_regex()?;
     let keep = |l: &str| hc.labels.is_empty() || hc.labels.iter().any(|p| wildcard(p, l));
     let mut messages: BTreeMap<String, Message> = BTreeMap::new();
-    let now = config.capture();
+    let now = config.capture()?;
     // every listing is recorded: a directory that cannot be listed held
     // messages to and from unknown seats, a gap for every seat
     let mut reads = Reads::default();
@@ -296,11 +296,17 @@ fn id_time(id: &str, modified: jiff::Timestamp) -> Option<jiff::Timestamp> {
 ///
 /// # Errors
 /// As [`collect`].
-pub fn from_dir(state: &Path, labels: &[&str], goal: &str) -> Result<Vec<Event>> {
-    let config = Config::parse(
+pub fn from_dir(
+    state: &Path,
+    labels: &[&str],
+    goal: &str,
+    capture: jiff::Timestamp,
+) -> Result<Vec<Event>> {
+    let mut config = Config::parse(
         &format!("[project]\ngoal_pattern = '{goal}'\n"),
         Path::new("/"),
     )?;
+    config.capture = Some(capture);
     let hc = HailConfig {
         state: state.display().to_string(),
         labels: labels.iter().map(|s| (*s).to_owned()).collect(),
@@ -333,8 +339,13 @@ mod tests {
         write(&seats.join("andon-1b/pending/1013T231056-5aeb"), msg);
         let other = "from: y-1a\nkind: fyi\nid: 1013T100000-0001\ntime: 2026-10-13T10:00:00Z\nask: unrelated\n\n";
         write(&seats.join("y-2b/cur/1013T100000-0001.read.md"), other);
-        let events = from_dir(dir.path(), &["andon*"], r"\bandon-[a-z0-9]{3}\b")
-            .unwrap_or_else(|e| panic!("{e}"));
+        let events = from_dir(
+            dir.path(),
+            &["andon*"],
+            r"\bandon-[a-z0-9]{3}\b",
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         let (covered, events): (Vec<_>, Vec<_>) =
             events.into_iter().partition(|e| e.kind == Kind::Coverage);
         assert_eq!(covered.len(), 1, "the state directory states its coverage");

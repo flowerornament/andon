@@ -88,6 +88,7 @@ impl Repo {
 const CONFIG: &str = r#"
 [project]
 goal_pattern = '\bdemo-[a-z0-9]{3}\b'
+[goal]
 [seats.demo-1a]
 [adapters.jj]
 repo = "."

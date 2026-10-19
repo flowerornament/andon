@@ -38,6 +38,10 @@ pub struct Config {
     /// source as the one instant it vouches for).
     #[serde(skip)]
     pub capture: Option<jiff::Timestamp>,
+    /// Whether the file declares `[goal]`: without it, no goal schema
+    /// applies (`.design/2026-10-19-goal-schema-as-config.md`).
+    #[serde(skip)]
+    pub goal_declared: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +61,10 @@ pub struct Project {
     /// a word shaped like an id (`x-review`) is not a goal.
     #[serde(default = "yes")]
     pub known_goals_only: bool,
+    /// The gate recipe that is the project's land verb: its refusals are
+    /// "last land refused", its passing runs time the land gate.
+    #[serde(default = "default_land_recipe")]
+    pub land_recipe: String,
 }
 
 impl Default for Project {
@@ -66,8 +74,13 @@ impl Default for Project {
             goal_pattern: default_goal_pattern(),
             goal_in: default_goal_in(),
             known_goals_only: true,
+            land_recipe: default_land_recipe(),
         }
     }
+}
+
+fn default_land_recipe() -> String {
+    "land".to_owned()
 }
 
 fn default_goal_in() -> String {
@@ -566,15 +579,21 @@ fn trunk() -> String {
 }
 
 impl Config {
-    /// The capture instant; the clock, for a caller that set none (a test,
-    /// a library use).
+    /// The capture instant. Every caller sets one before reading sources:
+    /// the command line from its one clock read, a library caller itself.
+    ///
+    /// # Errors
+    /// When none was set.
+    pub fn capture(&self) -> Result<jiff::Timestamp> {
+        self.capture.ok_or_else(|| {
+            anyhow::anyhow!("no capture instant: set config.capture before reading sources")
+        })
+    }
+
+    /// Whether a goal schema applies: `[goal]` is declared, even empty.
     #[must_use]
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "a library caller that set no capture instant reads the clock here, once; the CLI always sets one"
-    )]
-    pub fn capture(&self) -> jiff::Timestamp {
-        self.capture.unwrap_or_else(jiff::Timestamp::now)
+    pub const fn goal_schema(&self) -> bool {
+        self.goal_declared
     }
 
     /// Parse a config. `root` is where relative paths resolve.
@@ -584,6 +603,8 @@ impl Config {
     pub fn parse(text: &str, root: &Path) -> Result<Self> {
         let mut config: Self = toml::from_str(text).context("andon.toml is not valid")?;
         config.root = root.to_path_buf();
+        config.goal_declared =
+            toml::from_str::<toml::Table>(text).is_ok_and(|t| t.contains_key("goal"));
         if !matches!(config.project.goal_in.as_str(), "subject" | "message") {
             bail!(
                 "project.goal_in is {:?}; use \"subject\" or \"message\"",
@@ -702,6 +723,8 @@ pub const STARTER: &str = r#"# andon.toml: how this project's artifacts name sea
 name = "my-project"
 # A goal id as it appears in commit subjects and messages.
 goal_pattern = '\bmy-project-[a-z0-9]{3,6}\b'
+# The gate recipe that is the land verb: its refusals are "last land refused".
+land_recipe = "land"
 
 # Identity first: every fact joins to a seat by the name its tool recorded.
 # Each agent must act under its seat's name: with bd, set BEADS_ACTOR=<seat>
@@ -713,6 +736,8 @@ goal_pattern = '\bmy-project-[a-z0-9]{3,6}\b'
 aliases = ["my-project-1a"]
 prefixes = ["my-project-1a-"]
 
+# The goal schema: `check commit` and `check goal` hold work to it, and the
+# board shows goals and budgets. Remove [goal] for a board without them.
 [goal]
 sections = ["Why", "Done when", "Budget"]
 wip_per_seat = 1

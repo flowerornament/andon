@@ -388,8 +388,23 @@ pub fn gap_at(
     seat: Option<&str>,
     reason: impl Into<String>,
 ) -> Event {
-    let mut e = gap(at, covers, source, seat, reason);
-    e.t_end = Some(at);
+    gap_over(at, at, covers, source, seat, reason)
+}
+
+/// A gap over a span: the store's unreadable facts all lie in `from..=to`
+/// (an append-only file's facts precede its last write), so it stands only
+/// over spans that meet that one.
+#[must_use]
+pub fn gap_over(
+    from: Timestamp,
+    to: Timestamp,
+    covers: &[&str],
+    source: impl Into<String>,
+    seat: Option<&str>,
+    reason: impl Into<String>,
+) -> Event {
+    let mut e = gap(from, covers, source, seat, reason);
+    e.t_end = Some(to);
     e
 }
 

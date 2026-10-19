@@ -7,9 +7,8 @@
 //! | 2    | andon could not decide (no config, unreadable source); stdout |
 //! |      | names what to repair in one line                             |
 
-use std::fmt::Write as _;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, anyhow};
@@ -39,55 +38,14 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// The four gauges per seat over a window: DAY, FROM..TO or FROM..
-    ///
-    /// Columns, per seat, over the window:
-    ///   lands: landings on the trunk.
-    ///   runs: runner runs.
-    ///   fail: runs that failed.
-    ///   no-reason: failed runs that kept neither a reason nor an output tail.
-    ///   runs/land: runs per landing (— with no landing).
-    ///   go: GO verdicts on the seat's changes.
-    ///   return: RETURN verdicts on the seat's changes.
-    ///   sent: messages the seat sent.
-    ///   recv: messages the seat received.
-    ///   goal%: the share of sent messages that name a goal.
-    ///   asks-no-goal: decision messages sent (`[messages] decision_kinds`) that name no goal.
-    ///   created: tracker items the seat created.
-    ///   wip: goals of a counted type the seat held claimed and open at the window's end.
-    ///   active-h: hours with session activity.
-    ///
-    /// Below the table: flow medians (change start to landing, to first verdict, land gate),
-    /// the tracker (created, closed, created/closed, open, unowned), the hub, and how well the joins held.
-    /// `?` marks a value the sources do not cover; the reason is listed beneath.
-    #[command(verbatim_doc_comment)]
+    #[command(long_about = render::scorecard_help())]
     Scorecard {
         window: String,
         #[arg(long)]
         json: bool,
     },
     /// One row per seat: goal, budget spent, landings, runs, verdict, flags.
-    ///
-    /// Columns (counts cover the last `[board] window_hours`, 24 by default):
-    ///   goal: the goal the seat's latest work cites, then +N for the others it holds.
-    ///   budget: effort spent since the claim / the effort its `## Budget` section allows (agent-hours, hours, days or runs).
-    ///   lands: the seat's landings on the trunk in the window.
-    ///   last: how long ago the seat last landed.
-    ///   runs: the seat's runner runs in the window.
-    ///   pass: the share of those runs that passed.
-    ///   since-land: runs since the seat's last landing (with none, since landings are first read).
-    ///   verdict: the last review verdict on the seat's changes, and its age.
-    ///   findings: comments on the lead goal since it was claimed.
-    ///   flags: what needs acting on, below.
-    ///
-    /// Flags:
-    ///   over budget on G: more effort spent on G than its budget allows.
-    ///   N goals in progress, WIP W: more claimed goals of a counted type (`[goal] types`) than the seat may hold.
-    ///   no landing in Nd: the lead goal has gone N days with no landing (not for hubs).
-    ///   last land refused: the seat's last land run after its last landing failed or was refused.
-    ///   N runs since last landing: runs piling up with nothing landed (not for hubs).
-    ///
-    /// `?` marks a value the sources do not cover; the reason is listed under the table.
-    #[command(verbatim_doc_comment)]
+    #[command(long_about = render::board_help())]
     Board {
         /// Only this seat's row.
         #[arg(long)]
@@ -182,7 +140,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             let mut input = String::new();
             let _ = io::Read::read_to_string(&mut io::stdin(), &mut input);
             if *check {
-                let (report, ok) = hook_check(cli, &input, clock());
+                let (report, ok) = crate::hook::check(&sources(cli), &input, clock());
                 out.write_all(report.as_bytes())?;
                 return Ok(if ok {
                     ExitCode::SUCCESS
@@ -190,7 +148,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
                     ExitCode::from(1)
                 });
             }
-            match hook(cli, &input, clock()) {
+            match crate::hook::run(&sources(cli), &input, clock()) {
                 // a hook must never break the session: a write error, like any
                 // other, is explained on stderr and the hook exits 0
                 Ok(text) => {
@@ -275,206 +233,6 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
     }
 }
 
-/// `andon hook --check`: what a payload resolves to, line by line, and
-/// whether the hook can work with it.
-fn hook_check(cli: &Cli, input: &str, now: Timestamp) -> (String, bool) {
-    let mut report = String::new();
-    let mut line = |ok: bool, what: &str, detail: String| {
-        let _ = writeln!(
-            report,
-            "{} {what}: {detail}",
-            if ok { "ok     " } else { "refused" }
-        );
-        ok
-    };
-    let payload = crate::hook::Payload::parse(input);
-    if let Some(problem) = &payload.problem {
-        line(
-            false,
-            "payload",
-            format!("{problem}; pipe the harness's hook JSON to andon hook --check"),
-        );
-        return (report, false);
-    }
-    line(true, "payload", format!("{} event", payload.event));
-    let cwd = payload
-        .cwd
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_default();
-    let path = cli.config.clone().or_else(|| Config::find(&cwd));
-    let Some(path) = path else {
-        line(
-            false,
-            "config",
-            format!(
-                "no andon.toml in {} or above; add one, or pass --config",
-                cwd.display()
-            ),
-        );
-        return (report, false);
-    };
-    let config = match Config::load(&path) {
-        Ok(mut c) => {
-            c.capture = Some(now);
-            line(true, "config", path.display().to_string());
-            c
-        }
-        Err(e) => {
-            line(false, "config", format!("{e:#}"));
-            return (report, false);
-        }
-    };
-    let Some(seat) = crate::hook::seat_of(&cwd, &config) else {
-        line(
-            false,
-            "seat",
-            format!(
-                "{} belongs to no seat; add it under [seats] (cwd or prefixes)",
-                cwd.display()
-            ),
-        );
-        return (report, false);
-    };
-    let root = crate::hook::seat_root(&cwd, &seat);
-    line(
-        true,
-        "seat",
-        format!("{seat} (workspace {})", root.display()),
-    );
-    let ok = check_transcript_and_row(cli, &payload, &config, &seat, &root, now, &mut line);
-    (report, ok)
-}
-
-/// The rest of `hook --check`: the transcript, then the row itself.
-fn check_transcript_and_row(
-    cli: &Cli,
-    payload: &crate::hook::Payload,
-    config: &Config,
-    seat: &str,
-    root: &Path,
-    now: Timestamp,
-    line: &mut dyn FnMut(bool, &str, String) -> bool,
-) -> bool {
-    let mut ok = true;
-    match (
-        &payload.transcript,
-        payload
-            .transcript
-            .as_deref()
-            .and_then(crate::hook::last_turn),
-    ) {
-        (Some(p), Some(t)) => {
-            line(
-                true,
-                "transcript",
-                format!("{} (last turn {})", p.display(), render::short_time(t)),
-            );
-        }
-        (Some(p), None) => {
-            ok &= line(
-                false,
-                "transcript",
-                format!(
-                    "cannot read a last turn from {}; the hook cannot tell what changed",
-                    p.display()
-                ),
-            );
-        }
-        (None, _) if payload.event == "SessionStart" => {
-            line(
-                true,
-                "transcript",
-                "none needed at session start".to_owned(),
-            );
-        }
-        (None, _) => {
-            ok &= line(
-                false,
-                "transcript",
-                "the payload names no transcript_path; the hook cannot tell what changed"
-                    .to_owned(),
-            );
-        }
-    }
-    let ledger = match &cli.ledger {
-        Some(p) => read_ledger(p),
-        None => adapters::collect_for_seat(config, seat, root, now),
-    };
-    match ledger {
-        Ok(ledger) => {
-            let board = fold::board::board(&ledger, config, now);
-            let row = board.seats.iter().find(|r| r.seat == seat);
-            match row {
-                Some(r) => {
-                    line(true, "row", crate::hook::line(r, now));
-                }
-                None => {
-                    ok &= line(
-                        false,
-                        "row",
-                        format!("{seat} has no row; add it under [seats]"),
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            ok &= line(false, "sources", format!("{e:#}"));
-        }
-    }
-    ok
-}
-
-fn hook(cli: &Cli, input: &str, now: Timestamp) -> Result<String> {
-    let payload = crate::hook::Payload::parse(input);
-    if let Some(problem) = &payload.problem {
-        return Err(anyhow!(
-            "{problem}; the harness hook should pipe its JSON payload to `andon hook`"
-        ));
-    }
-    let cwd = match &payload.cwd {
-        Some(cwd) => cwd.clone(),
-        None => std::env::current_dir()?,
-    };
-    let path = match &cli.config {
-        Some(p) => p.clone(),
-        None => match Config::find(&cwd) {
-            Some(p) => p,
-            None => return Ok(String::new()),
-        },
-    };
-    let mut config = Config::load(&path)?;
-    config.capture = Some(now);
-    let Some(seat) = crate::hook::seat_of(&cwd, &config) else {
-        return Ok(String::new());
-    };
-    // a kept ledger when given; else only what this seat's row needs
-    let ledger = if let Some(path) = &cli.ledger {
-        read_ledger(path)?
-    } else {
-        let root = crate::hook::seat_root(&cwd, &seat);
-        adapters::collect_for_seat(&config, &seat, &root, now)?
-    };
-    let since = payload
-        .transcript
-        .as_deref()
-        .and_then(crate::hook::last_turn);
-    let mut text = crate::hook::render(&ledger, &config, &seat, &payload.event, since, now);
-    // on a prompt, a transcript andon cannot read means it cannot tell what
-    // changed: say so rather than look like "nothing changed"
-    if payload.event != "SessionStart" && since.is_none() {
-        let why = match &payload.transcript {
-            None => "the payload names no transcript_path".to_owned(),
-            Some(p) => format!("cannot read a last turn from {}", p.display()),
-        };
-        let _ = writeln!(
-            text,
-            "andon: hook cannot tell what changed since the last turn: {why}; check the wiring: andon hook --check"
-        );
-    }
-    Ok(text)
-}
-
 fn check(
     what: &CheckCommand,
     config: &Config,
@@ -493,6 +251,22 @@ fn check(
                 ))
             })
     };
+    // without a goal schema, commits and goals have nothing to be checked
+    // against: the check passes and says so, without reading a source
+    if !config.goal_schema() {
+        let empty = crate::commit::Commit::default();
+        match what {
+            CheckCommand::Commit { rev, .. } => {
+                let commit = crate::commit::Commit {
+                    id: rev.clone(),
+                    ..empty
+                };
+                return Ok(check::commit(&commit, ledger, config, now));
+            }
+            CheckCommand::Goal { id } => return Ok(check::goal(id, "", ledger, config, now)),
+            CheckCommand::Message { .. } => {}
+        }
+    }
     if matches!(what, CheckCommand::Commit { .. })
         || matches!(what, CheckCommand::Message { goal: Some(_), .. })
     {
@@ -576,6 +350,14 @@ fn show_board(
     Ok(ExitCode::SUCCESS)
 }
 
+/// Where the hook reads: `--config` and `--ledger`.
+fn sources(cli: &Cli) -> crate::hook::Sources<'_> {
+    crate::hook::Sources {
+        config: cli.config.as_deref(),
+        ledger: cli.ledger.as_deref(),
+    }
+}
+
 /// The clock, read where a command begins: the capture instant every
 /// adapter reads to, and every surface renders at.
 #[allow(
@@ -610,15 +392,9 @@ pub fn load_config(cli: &Cli, capture: Timestamp) -> Result<Config> {
 /// When the kept ledger or a source cannot be read.
 pub fn load_ledger(cli: &Cli, config: &Config) -> Result<Ledger> {
     match &cli.ledger {
-        Some(path) => read_ledger(path),
+        Some(path) => Ledger::open(path),
         None => adapters::collect(config),
     }
-}
-
-fn read_ledger(path: &Path) -> Result<Ledger> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("cannot read ledger {}", path.display()))?;
-    Ledger::read(io::BufReader::new(file))
 }
 
 /// Parse an instant or a date (a date means its end, for `asof`).

@@ -9,6 +9,8 @@
     reason = "fixtures build the repositories and files andon reads"
 )]
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -103,6 +105,8 @@ name = "demo"
 goal_pattern = '(?:[Cc]loses|[Ff]ixes|[Rr]esolves) (#\d+)'
 goal_in = "message"
 
+[goal]
+
 [seats.bot-1]
 aliases = ["octo-bot"]
 [seats.bot-2]
@@ -120,7 +124,7 @@ branch_seats = {{ "bot-1/" = "bot-1", "bot-2/" = "bot-2" }}
 "#,
         snapshot.display()
     );
-    Config::parse(&text, root).unwrap_or_else(|e| panic!("{e}"))
+    common::config(&text, root)
 }
 
 #[test]

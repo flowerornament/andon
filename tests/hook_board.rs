@@ -8,10 +8,11 @@
     reason = "fixtures build the repositories and files andon reads"
 )]
 
+mod common;
+
 use std::path::Path;
 
 use andon::adapters;
-use andon::config::Config;
 use andon::fold::board::board;
 use andon::time::parse_instant;
 
@@ -71,7 +72,7 @@ fn the_hooks_row_is_the_boards_row() {
     .join("\n");
     write(&root.join("tracker.jsonl"), &claims);
 
-    let config = Config::parse(
+    let config = common::config(
         &format!(
             r#"
 [seats.x-1a]
@@ -87,8 +88,7 @@ files = ["{root}/tracker.jsonl"]
             root = root.display()
         ),
         root,
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    );
     let now = parse_instant("2026-10-13T13:00:00Z").unwrap_or_else(|e| panic!("{e}"));
     let full = adapters::collect(&config).unwrap_or_else(|e| panic!("{e:#}"));
     let cheap = adapters::collect_for_seat(&config, "x-1a", &seat_dir, now)

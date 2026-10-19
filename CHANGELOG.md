@@ -4,6 +4,24 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- **No `[goal]`, no goal checks** (`.design/2026-10-19-goal-schema-as-config.md`).
+  A config without `[goal]` gets no goal checks: `check goal` and `check
+  commit` pass with a note, the board drops its goal and budget columns,
+  and the WIP and over-budget flags are not raised. Declaring `[goal]`,
+  even empty, keeps the founding schema; `andon init` declares it.
+- The `--json` output and the hook's line have a stated contract
+  (`.design/2026-10-19-output-contract.md`). `tests/schema.rs` fails when
+  a field changes without the schema number moving. Board and scorecard
+  stay at schema 2, unchanged.
+- Goals claimed by an identity that is no seat are one line per identity,
+  with a count and the fix. `--json` still lists every goal.
+- `[project] land_recipe` (default `land`) names the land verb's gate
+  recipe, which was hardcoded.
+- An unreadable transcript blanks active hours only for windows reaching
+  back before its last write.
+- Library callers must set `config.capture` before reading sources; the
+  clock is no longer read as a fallback.
+
 - Event attributes are a declared contract (`src/event.rs`, `attr::ALL`):
   one name, shape and meaning per key. An external adapter's declared key
   of the wrong shape is refused; an undeclared key is carried, never read.

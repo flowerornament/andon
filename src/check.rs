@@ -50,6 +50,11 @@ impl Answer {
 #[must_use]
 pub fn commit(commit: &Commit, ledger: &Ledger, config: &Config, now: Timestamp) -> Answer {
     let short = commit.id.get(..12).unwrap_or(&commit.id);
+    if !config.goal_schema() {
+        return Answer::Ok(format!(
+            "{short}: no goal schema is configured ([goal] in andon.toml), so a commit need cite none"
+        ));
+    }
     let items = Index::new(ledger).items_at(now);
     let held = |seat: &str| -> Vec<&String> {
         items
@@ -136,6 +141,11 @@ pub fn goal(
     config: &Config,
     now: Timestamp,
 ) -> Answer {
+    if !config.goal_schema() {
+        return Answer::Ok(format!(
+            "{id}: no goal schema is configured ([goal] in andon.toml), so there is nothing to check"
+        ));
+    }
     let problems = goal::problems(description, config);
     if let Some(first) = problems.first() {
         let more = if problems.len() > 1 {
@@ -263,7 +273,7 @@ mod tests {
     fn config(extra: &str) -> Config {
         Config::parse(
             &format!(
-                "[project]\ngoal_pattern = '\\bandon-[a-z0-9]{{3}}\\b'\n[seats.andon-1a]\n[seats.andon-1b]\n[adapters.bd]\ndir = \".\"\n{extra}"
+                "[project]\ngoal_pattern = '\\bandon-[a-z0-9]{{3}}\\b'\n[goal]\n[seats.andon-1a]\n[seats.andon-1b]\n[adapters.bd]\ndir = \".\"\n{extra}"
             ),
             Path::new("/"),
         )

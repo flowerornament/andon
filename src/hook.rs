@@ -14,16 +14,17 @@
 //! it prints nothing to stdout, explains on stderr, and exits 0.
 
 use std::fmt::Write as _;
+
+use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::fold::board::{self, Row};
-use crate::fold::coverage::Coverage;
+use crate::fold::projection::Projection;
 use crate::ledger::Ledger;
 use crate::render;
 use crate::seat::Resolver;
@@ -116,8 +117,220 @@ pub fn last_turn(transcript: &Path) -> Option<Timestamp> {
     })
 }
 
+/// Where the hook reads its config and ledger from: `--config` and
+/// `--ledger`, else the nearest andon.toml and the sources.
+pub struct Sources<'a> {
+    pub config: Option<&'a Path>,
+    pub ledger: Option<&'a Path>,
+}
+
+/// `andon hook --check`: what a payload resolves to, line by line, and
+/// whether the hook can work with it.
+pub fn check(sources: &Sources<'_>, input: &str, now: Timestamp) -> (String, bool) {
+    let mut report = String::new();
+    let mut line = |ok: bool, what: &str, detail: String| {
+        let _ = writeln!(
+            report,
+            "{} {what}: {detail}",
+            if ok { "ok     " } else { "refused" }
+        );
+        ok
+    };
+    let payload = Payload::parse(input);
+    if let Some(problem) = &payload.problem {
+        line(
+            false,
+            "payload",
+            format!("{problem}; pipe the harness's hook JSON to andon hook --check"),
+        );
+        return (report, false);
+    }
+    line(true, "payload", format!("{} event", payload.event));
+    let cwd = payload
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let path = sources
+        .config
+        .map(Path::to_path_buf)
+        .or_else(|| Config::find(&cwd));
+    let Some(path) = path else {
+        line(
+            false,
+            "config",
+            format!(
+                "no andon.toml in {} or above; add one, or pass --config",
+                cwd.display()
+            ),
+        );
+        return (report, false);
+    };
+    let config = match Config::load(&path) {
+        Ok(mut c) => {
+            c.capture = Some(now);
+            line(true, "config", path.display().to_string());
+            c
+        }
+        Err(e) => {
+            line(false, "config", format!("{e:#}"));
+            return (report, false);
+        }
+    };
+    let Some(seat) = seat_of(&cwd, &config) else {
+        line(
+            false,
+            "seat",
+            format!(
+                "{} belongs to no seat; add it under [seats] (cwd or prefixes)",
+                cwd.display()
+            ),
+        );
+        return (report, false);
+    };
+    let root = seat_root(&cwd, &seat);
+    line(
+        true,
+        "seat",
+        format!("{seat} (workspace {})", root.display()),
+    );
+    let ok = check_transcript_and_row(sources, &payload, &config, &seat, &root, now, &mut line);
+    (report, ok)
+}
+
+/// The rest of `hook --check`: the transcript, then the row itself.
+fn check_transcript_and_row(
+    sources: &Sources<'_>,
+    payload: &Payload,
+    config: &Config,
+    seat: &str,
+    root: &Path,
+    now: Timestamp,
+    line: &mut dyn FnMut(bool, &str, String) -> bool,
+) -> bool {
+    let mut ok = true;
+    match (
+        &payload.transcript,
+        payload.transcript.as_deref().and_then(last_turn),
+    ) {
+        (Some(p), Some(t)) => {
+            line(
+                true,
+                "transcript",
+                format!("{} (last turn {})", p.display(), render::short_time(t)),
+            );
+        }
+        (Some(p), None) => {
+            ok &= line(
+                false,
+                "transcript",
+                format!(
+                    "cannot read a last turn from {}; the hook cannot tell what changed",
+                    p.display()
+                ),
+            );
+        }
+        (None, _) if payload.event == "SessionStart" => {
+            line(
+                true,
+                "transcript",
+                "none needed at session start".to_owned(),
+            );
+        }
+        (None, _) => {
+            ok &= line(
+                false,
+                "transcript",
+                "the payload names no transcript_path; the hook cannot tell what changed"
+                    .to_owned(),
+            );
+        }
+    }
+    let ledger = match sources.ledger {
+        Some(p) => Ledger::open(p),
+        None => crate::adapters::collect_for_seat(config, seat, root, now),
+    };
+    match ledger {
+        Ok(ledger) => {
+            let board = board::board(&ledger, config, now);
+            let row = board.seats.iter().find(|r| r.seat == seat);
+            match row {
+                Some(r) => {
+                    let columns = render::board_columns(config.goal_schema());
+                    line(true, "row", self::line(r, now, &columns));
+                }
+                None => {
+                    ok &= line(
+                        false,
+                        "row",
+                        format!("{seat} has no row; add it under [seats]"),
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            ok &= line(false, "sources", format!("{e:#}"));
+        }
+    }
+    ok
+}
+
+/// `andon hook`: the seat's row and what changed, for the harness to put
+/// into the agent's turn.
+///
+/// # Errors
+/// When the payload, the config or a source cannot be read; the caller
+/// says so in one line and never fails the session.
+pub fn run(sources: &Sources<'_>, input: &str, now: Timestamp) -> Result<String> {
+    let payload = Payload::parse(input);
+    if let Some(problem) = &payload.problem {
+        return Err(anyhow!(
+            "{problem}; the harness hook should pipe its JSON payload to `andon hook`"
+        ));
+    }
+    let cwd = match &payload.cwd {
+        Some(cwd) => cwd.clone(),
+        None => std::env::current_dir()?,
+    };
+    let path = match sources.config {
+        Some(p) => p.to_path_buf(),
+        None => match Config::find(&cwd) {
+            Some(p) => p,
+            None => return Ok(String::new()),
+        },
+    };
+    let mut config = Config::load(&path)?;
+    config.capture = Some(now);
+    let Some(seat) = seat_of(&cwd, &config) else {
+        return Ok(String::new());
+    };
+    // a kept ledger when given; else only what this seat's row needs
+    let ledger = if let Some(path) = sources.ledger {
+        Ledger::open(path)?
+    } else {
+        let root = seat_root(&cwd, &seat);
+        crate::adapters::collect_for_seat(&config, &seat, &root, now)?
+    };
+    let since = payload.transcript.as_deref().and_then(last_turn);
+    let mut text = render(&ledger, &config, &seat, &payload.event, since, now);
+    // on a prompt, a transcript andon cannot read means it cannot tell what
+    // changed: say so rather than look like "nothing changed"
+    if payload.event != "SessionStart" && since.is_none() {
+        let why = match &payload.transcript {
+            None => "the payload names no transcript_path".to_owned(),
+            Some(p) => format!("cannot read a last turn from {}", p.display()),
+        };
+        let _ = writeln!(
+            text,
+            "andon: hook cannot tell what changed since the last turn: {why}; check the wiring: andon hook --check"
+        );
+    }
+    Ok(text)
+}
+
 /// The hook's output for a seat at `now`. Pure: everything it reads is an
-/// argument.
+/// argument. It folds the ledger once: the row now and the goals held at the
+/// last turn are both read off one projection.
 #[must_use]
 pub fn render(
     ledger: &Ledger,
@@ -127,12 +340,15 @@ pub fn render(
     since: Option<Timestamp>,
     now: Timestamp,
 ) -> String {
-    let board = board::board(ledger, config, now);
-    let Some(row) = board.seats.iter().find(|r| r.seat == seat) else {
+    let ledger = ledger.prefix(now);
+    let p = Projection::new(&ledger, config);
+    let now_board = board::board_of(&p, now);
+    let Some(row) = now_board.seats.into_iter().find(|r| r.seat == seat) else {
         return String::new();
     };
+    let columns = render::board_columns(config.goal_schema());
     if event == "SessionStart" {
-        return format!("andon: {}\n", line(row, now));
+        return format!("andon: {}\n", line(&row, now, &columns));
     }
     let Some(since) = since else {
         return String::new();
@@ -140,25 +356,22 @@ pub fn render(
     // claims and closes from a current-state source (a tracker export) are
     // not changes since the last turn: a claim released meanwhile is not in
     // it. They are listed only where some source reads them as history
-    let coverage = Coverage::new(ledger);
-    let mut changes = changes(ledger, seat, since, now, &|k| coverage.reads(k));
-    let before = board::board(ledger, config, since);
-    let held = |r: &Row| r.goals.get().cloned().unwrap_or_default();
-    if let Some(prev) = before.seats.iter().find(|r| r.seat == seat) {
-        let was = held(prev);
-        let over =
-            |g: &board::Goal| matches!((g.used.get(), g.amount), (Some(u), Some(b)) if *u > b);
-        for goal in held(row) {
-            if over(&goal) && !was.iter().find(|g| g.id == goal.id).is_some_and(over) {
-                changes.push(format!("over budget on {}", goal.id));
-            }
+    let mut changes = changes(&p, seat, since, now);
+    let before = board::goals_at(&p, &board::gauger(&p, since), seat);
+    let was = before.get().map_or(&[][..], Vec::as_slice);
+    for goal in row.goals.get().map_or(&[][..], Vec::as_slice) {
+        if config.goal_schema()
+            && goal.over_budget()
+            && !was.iter().any(|g| g.id == goal.id && g.over_budget())
+        {
+            changes.push(board::over_budget(&goal.id));
         }
     }
-    let unread = unread(ledger, seat, since, now);
+    let unread = unread(&p, seat, since, now);
     if changes.is_empty() && unread.is_empty() {
         return String::new();
     }
-    let mut out = format!("andon: {}\n", line(row, now));
+    let mut out = format!("andon: {}\n", line(&row, now, &columns));
     let mut said = capped(&changes);
     if !unread.is_empty() {
         // a count over a span the ledger did not fully read is not the
@@ -176,8 +389,7 @@ pub fn render(
 
 /// The kinds the change line counts that the ledger does not cover for the
 /// seat over `since..now`.
-fn unread(ledger: &Ledger, seat: &str, since: Timestamp, now: Timestamp) -> Vec<&'static str> {
-    let coverage = Coverage::new(ledger);
+fn unread(p: &Projection<'_>, seat: &str, since: Timestamp, now: Timestamp) -> Vec<&'static str> {
     let kinds: [(&[&str], &str); 5] = [
         (&["verdict", "commit"], "verdicts"),
         (&["gate_run"], "land runs"),
@@ -188,42 +400,35 @@ fn unread(ledger: &Ledger, seat: &str, since: Timestamp, now: Timestamp) -> Vec<
     kinds
         .into_iter()
         // a kind no source reads is the board's `?`, not news each turn
-        .filter(|(k, _)| k.iter().all(|k| coverage.reads(k)))
-        .filter(|(k, _)| since < now && coverage.check(k, Some(seat), since, now).is_some())
+        .filter(|(k, _)| k.iter().all(|k| p.coverage.reads(k)))
+        .filter(|(k, _)| since < now && p.coverage.check(k, Some(seat), since, now).is_some())
         .map(|(_, noun)| noun)
         .collect()
 }
 
-/// The row on one line, for injection.
+/// The row on one line, for injection: each column's cell after its name.
 #[must_use]
-pub fn line(row: &Row, now: Timestamp) -> String {
-    let cells = render::board_row(row, now);
-    let header = render::board_header();
+pub fn line(row: &Row, now: Timestamp, columns: &[render::Column<Row>]) -> String {
     let mut parts = vec![row.seat.clone()];
-    for (name, cell) in header.iter().zip(cells.iter()).skip(1) {
+    for column in columns.iter().skip(1) {
+        let cell = (column.cell)(row, now);
         if cell.is_empty() || cell == "—" {
             continue;
         }
-        if name == "flags" {
-            parts.push(format!("⚑ {cell}"));
-        } else if name == "goal" {
-            parts.push(cell.clone());
-        } else {
-            parts.push(format!("{name} {cell}"));
+        match column.name {
+            "flags" => parts.push(format!("⚑ {cell}")),
+            "goal" => parts.push(cell),
+            name => parts.push(format!("{name} {cell}")),
         }
     }
     parts.join("  ")
 }
 
 /// Facts about the seat recorded after its last turn.
-fn changes(
-    ledger: &Ledger,
-    seat: &str,
-    since: Timestamp,
-    now: Timestamp,
-    history: &dyn Fn(&str) -> bool,
-) -> Vec<String> {
+fn changes(p: &Projection<'_>, seat: &str, since: Timestamp, now: Timestamp) -> Vec<String> {
     use std::collections::BTreeMap;
+    let ledger = p.ledger;
+    let history = |k: &str| p.coverage.reads(k);
     let mine = |e: &&Event| e.seat.as_deref() == Some(seat) && e.t > since && e.t <= now;
     let held: Vec<&str> = ledger
         .events()
@@ -250,12 +455,7 @@ fn changes(
             }
             Kind::Claim => claimed.push(goal(e)),
             Kind::Land => *lands.entry(goal(e)).or_default() += 1,
-            Kind::GateRun
-                if e.attr_str(attr::RECIPE) == Some("land")
-                    && matches!(e.outcome, Some(Outcome::Fail | Outcome::Refused)) =>
-            {
-                refused += 1;
-            }
+            Kind::GateRun if p.refused_land(e) => refused += 1,
             _ => {}
         }
     }
@@ -353,6 +553,7 @@ pub fn capped(changes: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::adapters;
+    use crate::event::attr;
 
     #[test]
     fn a_long_absence_is_one_bounded_line() {
@@ -372,8 +573,11 @@ mod tests {
     }
 
     fn config() -> Config {
-        Config::parse("[seats.andon-1b]\n[seats.andon-1a]\n", Path::new("/"))
-            .unwrap_or_else(|e| panic!("{e}"))
+        Config::parse(
+            "[goal]\n[seats.andon-1b]\n[seats.andon-1a]\n",
+            Path::new("/"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn at(s: &str) -> Timestamp {
@@ -490,5 +694,23 @@ mod tests {
             now,
         );
         assert_eq!(quiet, "");
+    }
+
+    #[test]
+    fn a_prompt_folds_the_ledger_once() {
+        // the row now and the goals held at the last turn come off one
+        // projection: the hook used to fold the whole board twice per call
+        let (l, c) = (ledger(), config());
+        let before = crate::fold::projection::folds();
+        let out = render(
+            &l,
+            &c,
+            "andon-1b",
+            "UserPromptSubmit",
+            Some(at("2026-10-13T11:00:00Z")),
+            at("2026-10-13T13:00:00Z"),
+        );
+        assert!(out.contains("since your last turn"), "{out}");
+        assert_eq!(crate::fold::projection::folds() - before, 1);
     }
 }

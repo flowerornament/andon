@@ -78,7 +78,7 @@ fn a_refused_message_exits_1_with_one_line() {
 #[test]
 fn a_goal_check_refuses_missing_sections_and_warns_on_a_vague_done_when() {
     use std::io::Write;
-    let dir = empty_project("[seats.a]\n");
+    let dir = empty_project("[goal]\n[seats.a]\n");
     let run = |text: &[u8]| {
         let mut child = Command::new(env!("CARGO_BIN_EXE_andon"))
             .args(["check", "goal", "-"])
@@ -289,10 +289,51 @@ fn every_column_is_defined_in_help() {
         );
     }
     let card = help("scorecard");
-    for name in andon::render::SCORECARD_HEADER.iter().skip(1) {
+    for name in andon::render::SCORECARD.iter().skip(1).map(|c| c.name) {
         assert!(
             defined(&card, name),
             "scorecard --help does not define {name}:\n{card}"
         );
+    }
+}
+
+/// The 2026-10-19 ruling: a config that declares no `[goal]` gets no goal
+/// checks, and the board drops its goal and budget columns. `[goal]`, even
+/// empty, opts back in.
+#[test]
+fn without_a_goal_section_there_are_no_goal_checks_and_no_goal_columns() {
+    let ledger = concat!(
+        r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":"pass","source":"test","attrs":{"covers":["create","claim","close","land","run","verdict","commit","other:comment"]}}"#,
+        "\n",
+        r#"{"t":"2026-10-13T08:00:00Z","kind":"claim","actor":"x-1a","subject":"x-abc","ids":{"goal":"x-abc"},"source":"test"}"#,
+        "\n"
+    );
+    for (config, schema) in [("[seats.x-1a]\n", false), ("[goal]\n[seats.x-1a]\n", true)] {
+        let dir = empty_project(config);
+        std::fs::write(dir.path().join("l.jsonl"), ledger).unwrap_or_else(|e| panic!("{e}"));
+        let at = |args: &[&str]| {
+            let mut all = vec!["--ledger", "l.jsonl"];
+            all.extend_from_slice(args);
+            andon(&all, dir.path())
+        };
+        let board = stdout(&at(&["asof", "2026-10-13T12:00:00Z"]));
+        assert_eq!(board.contains("budget"), schema, "{board}");
+        assert_eq!(board.contains("x-abc"), schema, "{board}");
+        let goal = at(&["check", "goal", "-"]);
+        let commit = at(&["check", "commit", "@", "--seat", "x-1a"]);
+        if schema {
+            // the founding schema: an empty description is refused, and a
+            // commit is read through a vcs adapter this config lacks
+            assert_eq!(goal.status.code(), Some(1), "{}", stdout(&goal));
+            assert_eq!(commit.status.code(), Some(2), "{}", stdout(&commit));
+        } else {
+            assert_eq!(goal.status.code(), Some(0));
+            assert_eq!(
+                stdout(&goal),
+                "ok: -: no goal schema is configured ([goal] in andon.toml), so there is nothing to check\n"
+            );
+            assert_eq!(commit.status.code(), Some(0));
+            assert!(stdout(&commit).contains("so a commit need cite none"));
+        }
     }
 }

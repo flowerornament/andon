@@ -9,11 +9,12 @@
     reason = "fixtures build the repositories and files andon reads"
 )]
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
 use andon::adapters;
-use andon::config::Config;
 use andon::event::attr;
 use andon::event::{Event, Kind, Outcome};
 use andon::ledger::Ledger;
@@ -32,7 +33,7 @@ fn write(path: &Path, text: &str) {
 }
 
 fn read(dir: &Path, toml: &str) -> Ledger {
-    let config = Config::parse(toml, dir).unwrap_or_else(|e| panic!("{e}"));
+    let config = common::config(toml, dir);
     adapters::collect(&config).unwrap_or_else(|e| panic!("{e:#}"))
 }
 

@@ -112,47 +112,102 @@ fn count(g: &Gauge<usize>) -> String {
     g.cell(ToString::to_string)
 }
 
-fn card_row(name: &str, c: &SeatCard) -> Vec<String> {
-    // an uncovered gauge is `?`: the ledger cannot say, which is not 0
-    vec![
-        name.to_owned(),
-        count(&c.landings),
-        c.runs.cell(|r| r.total.to_string()),
-        c.runs.cell(|r| r.fail.to_string()),
-        c.runs.cell(|r| r.fail_without_reason.to_string()),
-        c.runs_per_landing.cell(|v| opt(*v)),
-        count(&c.verdicts_go),
-        count(&c.verdicts_return),
-        count(&c.messages_sent),
-        count(&c.messages_received),
-        both(&c.messages_naming_goal, &c.messages_sent, |n, s| {
-            percent(*n, *s)
-        }),
-        count(&c.decisions_without_goal),
-        count(&c.items_created),
-        count(&c.wip_at_end),
-        c.active_hours.cell(|h| format!("{h:.1}")),
-    ]
-}
-
-/// The scorecard's columns; `scorecard --help` defines each.
-pub const SCORECARD_HEADER: &[&str] = &[
-    "seat",
-    "lands",
-    "runs",
-    "fail",
-    "no-reason",
-    "runs/land",
-    "go",
-    "return",
-    "sent",
-    "recv",
-    "goal%",
-    "asks-no-goal",
-    "created",
-    "wip",
-    "active-h",
+/// The scorecard's columns, in order; `scorecard --help` defines each from
+/// here. An uncovered gauge is `?`: the ledger cannot say, which is not 0.
+pub const SCORECARD: &[Column<SeatCard>] = &[
+    Column {
+        name: "seat",
+        help: "the seat, then the unattributed and total rows.",
+        cell: |c, _| c.name.clone(),
+    },
+    Column {
+        name: "lands",
+        help: "landings on the trunk.",
+        cell: |c, _| count(&c.landings),
+    },
+    Column {
+        name: "runs",
+        help: "runner runs.",
+        cell: |c, _| c.runs.cell(|r| r.total.to_string()),
+    },
+    Column {
+        name: "fail",
+        help: "runs that failed.",
+        cell: |c, _| c.runs.cell(|r| r.fail.to_string()),
+    },
+    Column {
+        name: "no-reason",
+        help: "failed runs that kept neither a reason nor an output tail.",
+        cell: |c, _| c.runs.cell(|r| r.fail_without_reason.to_string()),
+    },
+    Column {
+        name: "runs/land",
+        help: "runs per landing (— with no landing).",
+        cell: |c, _| c.runs_per_landing.cell(|v| opt(*v)),
+    },
+    Column {
+        name: "go",
+        help: "GO verdicts on the seat's changes.",
+        cell: |c, _| count(&c.verdicts_go),
+    },
+    Column {
+        name: "return",
+        help: "RETURN verdicts on the seat's changes.",
+        cell: |c, _| count(&c.verdicts_return),
+    },
+    Column {
+        name: "sent",
+        help: "messages the seat sent.",
+        cell: |c, _| count(&c.messages_sent),
+    },
+    Column {
+        name: "recv",
+        help: "messages the seat received.",
+        cell: |c, _| count(&c.messages_received),
+    },
+    Column {
+        name: "goal%",
+        help: "the share of sent messages that name a goal.",
+        cell: |c, _| {
+            both(&c.messages_naming_goal, &c.messages_sent, |n, s| {
+                percent(*n, *s)
+            })
+        },
+    },
+    Column {
+        name: "asks-no-goal",
+        help: "decision messages sent (`[messages] decision_kinds`) that name no goal.",
+        cell: |c, _| count(&c.decisions_without_goal),
+    },
+    Column {
+        name: "created",
+        help: "tracker items the seat created.",
+        cell: |c, _| count(&c.items_created),
+    },
+    Column {
+        name: "wip",
+        help: "goals of a counted type the seat held claimed and open at the window's end.",
+        cell: |c, _| count(&c.wip_at_end),
+    },
+    Column {
+        name: "active-h",
+        help: "hours with session activity.",
+        cell: |c, _| c.active_hours.cell(|h| format!("{h:.1}")),
+    },
 ];
+
+/// `scorecard --help`, from the columns declared once.
+#[must_use]
+pub fn scorecard_help() -> String {
+    let mut out = String::from(
+        "The four gauges per seat over a window: DAY, FROM..TO or FROM..\n\nColumns, per seat, over the window:\n",
+    );
+    out.push_str(&help(SCORECARD));
+    out.push_str(
+        "\nBelow the table: flow medians (change start to landing, to first verdict, land gate),\nthe tracker (created, closed, created/closed, open, unowned), the hub, and how well the joins held.\n`?` marks a value the sources do not cover; the reason is listed beneath.",
+    );
+    out
+}
 
 /// The scorecard as text.
 #[must_use]
@@ -172,23 +227,14 @@ pub fn scorecard(card: &Scorecard) -> String {
             short_time(card.to)
         );
     }
-    let mut rows = vec![
-        SCORECARD_HEADER
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect::<Vec<_>>(),
-    ];
-    let mut idle = 0;
-    for (seat, c) in &card.seats {
-        if c.configured || c.active {
-            rows.push(card_row(seat, c));
-        } else {
-            idle += 1;
-        }
-    }
-    rows.push(card_row("(unattributed)", &card.unattributed));
-    rows.push(card_row("total", &card.total));
-    out.push_str(&table(&rows));
+    let shown: Vec<&SeatCard> = card
+        .seats
+        .values()
+        .filter(|c| c.configured || c.active)
+        .chain([&card.unattributed, &card.total])
+        .collect();
+    let idle = card.seats.len() + 2 - shown.len();
+    out.push_str(&grid(SCORECARD, shown, card.to));
     if idle > 0 {
         let _ = writeln!(
             out,
@@ -343,37 +389,75 @@ fn unit_short(unit: &str) -> &str {
     }
 }
 
-/// The board's header row.
-#[must_use]
-pub fn board_header() -> Vec<String> {
-    [
-        "seat",
-        "goal",
-        "budget",
-        "lands",
-        "last",
-        "runs",
-        "pass",
-        "since-land",
-        "verdict",
-        "findings",
-        "flags",
-    ]
-    .iter()
-    .map(|s| (*s).to_owned())
-    .collect()
+/// A column of a table: its header, the line `--help` defines it with,
+/// and its cell. A column is declared once, here, and the table, the hook's
+/// line and `--help` all read it.
+pub struct Column<R> {
+    pub name: &'static str,
+    pub help: &'static str,
+    pub cell: fn(&R, Timestamp) -> String,
 }
 
-/// One seat's row as cells.
+impl<R> Clone for Column<R> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<R> Copy for Column<R> {}
+
+/// `columns` as a table over `rows`, at `now`.
 #[must_use]
-pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
-    let goal_cell = row.goals.cell(|goals| match (goals.first(), goals.len()) {
+pub fn grid<'r, R: 'r>(
+    columns: &[Column<R>],
+    rows: impl IntoIterator<Item = &'r R>,
+    now: Timestamp,
+) -> String {
+    let mut table_rows = vec![columns.iter().map(|c| c.name.to_owned()).collect()];
+    for row in rows {
+        table_rows.push(columns.iter().map(|c| (c.cell)(row, now)).collect());
+    }
+    table(&table_rows)
+}
+
+/// Each column after the first, defined in one line for `--help`.
+#[must_use]
+pub fn help<R>(columns: &[Column<R>]) -> String {
+    let mut out = String::new();
+    for c in columns.iter().skip(1) {
+        let _ = writeln!(out, "  {}: {}", c.name, c.help);
+    }
+    out
+}
+
+/// Every unknown gauge in `rows`, as (`label gauge`, reason): read off the
+/// output itself, so a cell cannot be `?` without its reason.
+#[must_use]
+pub fn row_unknowns<R: serde::Serialize>(
+    rows: &[R],
+    label: fn(&R) -> &str,
+) -> Vec<(String, String)> {
+    rows.iter()
+        .flat_map(|row| {
+            let json = serde_json::to_value(row).unwrap_or_default();
+            unknowns(&json)
+                .into_iter()
+                .map(move |(path, why)| (format!("{} {path}", label(row)), why))
+        })
+        .collect()
+}
+
+fn goal_cell(row: &Row, _: Timestamp) -> String {
+    row.goals.cell(|goals| match (goals.first(), goals.len()) {
         (None, _) => "—".to_owned(),
         (Some(g), 1) => g.id.clone(),
         (Some(g), n) => format!("{} +{}", g.id, n - 1),
-    });
-    // budget is the lead goal's: unknown when the goals are
-    let budget = match row.goals.get() {
+    })
+}
+
+/// The lead goal's budget: unknown when the goals are.
+fn budget_cell(row: &Row, _: Timestamp) -> String {
+    match row.goals.get() {
         None => "?".to_owned(),
         Some(goals) => goals.first().map_or_else(
             || "—".to_owned(),
@@ -388,8 +472,11 @@ pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
                 })
             },
         ),
-    };
-    let verdict = row.last_verdict.cell(|v| {
+    }
+}
+
+fn verdict_cell(row: &Row, now: Timestamp) -> String {
+    row.last_verdict.cell(|v| {
         v.as_ref().map_or_else(
             || "—".to_owned(),
             |v| {
@@ -400,25 +487,111 @@ pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
                 )
             },
         )
-    });
-    vec![
-        row.seat.clone(),
-        goal_cell,
-        budget,
-        count(&row.landings),
-        row.last_land
-            .cell(|l| l.map_or_else(|| "—".to_owned(), |t| age(t, now))),
-        count(&row.runs),
-        both(&row.runs_pass, &row.runs, |p, r| percent(*p, *r)),
-        count(&row.runs_since_land),
-        verdict,
-        count(&row.findings),
-        if row.flags.is_empty() {
-            String::new()
-        } else {
-            row.flags.join(" · ")
+    })
+}
+
+/// The board's columns, in order; `board --help` defines each from here.
+pub const BOARD: &[Column<Row>] = &[
+    Column {
+        name: "seat",
+        help: "the seat.",
+        cell: |r, _| r.seat.clone(),
+    },
+    Column {
+        name: "goal",
+        help: "the goal the seat's latest work cites, then +N for the others it holds.",
+        cell: goal_cell,
+    },
+    Column {
+        name: "budget",
+        help: "effort spent since the claim / the effort its `## Budget` section allows (agent-hours, hours, days or runs).",
+        cell: budget_cell,
+    },
+    Column {
+        name: "lands",
+        help: "the seat's landings on the trunk in the window.",
+        cell: |r, _| count(&r.landings),
+    },
+    Column {
+        name: "last",
+        help: "how long ago the seat last landed.",
+        cell: |r, now| {
+            r.last_land
+                .cell(|l| l.map_or_else(|| "—".to_owned(), |t| age(t, now)))
         },
-    ]
+    },
+    Column {
+        name: "runs",
+        help: "the seat's runner runs in the window.",
+        cell: |r, _| count(&r.runs),
+    },
+    Column {
+        name: "pass",
+        help: "the share of those runs that passed.",
+        cell: |r, _| both(&r.runs_pass, &r.runs, |p, n| percent(*p, *n)),
+    },
+    Column {
+        name: "since-land",
+        help: "runs since the seat's last landing (with none, since landings are first read).",
+        cell: |r, _| count(&r.runs_since_land),
+    },
+    Column {
+        name: "verdict",
+        help: "the last review verdict on the seat's changes, and its age.",
+        cell: verdict_cell,
+    },
+    Column {
+        name: "findings",
+        help: "comments on the lead goal since it was claimed.",
+        cell: |r, _| count(&r.findings),
+    },
+    Column {
+        name: "flags",
+        help: "what needs acting on, below.",
+        cell: |r, _| r.flags.join(" · "),
+    },
+];
+
+/// The columns a goal schema adds; without `[goal]` the board has none.
+const GOAL_COLUMNS: &[&str] = &["goal", "budget"];
+
+/// The board's columns under a config: all, or without the goal schema's.
+#[must_use]
+pub fn board_columns(goal_schema: bool) -> Vec<Column<Row>> {
+    BOARD
+        .iter()
+        .filter(|c| goal_schema || !GOAL_COLUMNS.contains(&c.name))
+        .copied()
+        .collect()
+}
+
+/// The board's header row.
+#[must_use]
+pub fn board_header() -> Vec<String> {
+    BOARD.iter().map(|c| c.name.to_owned()).collect()
+}
+
+/// One seat's row as cells.
+#[must_use]
+pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
+    BOARD.iter().map(|c| (c.cell)(row, now)).collect()
+}
+
+/// `board --help`, from the columns and flags declared once.
+#[must_use]
+pub fn board_help() -> String {
+    let mut out = String::from(
+        "One row per seat: goal, budget spent, landings, runs, verdict, flags.\n\nColumns (counts cover the last `[board] window_hours`, 24 by default):\n",
+    );
+    out.push_str(&help(BOARD));
+    out.push_str("\nFlags:\n");
+    for (flag, means) in crate::fold::board::FLAGS {
+        let _ = writeln!(out, "  {flag}: {means}");
+    }
+    out.push_str(
+        "\n`?` marks a value the sources do not cover; the reason is listed under the table.",
+    );
+    out
 }
 
 /// The board as text.
@@ -429,20 +602,20 @@ pub fn board(board: &Board) -> String {
         short_time(board.asof),
         board.window_hours
     );
-    let mut rows = vec![board_header()];
-    for row in &board.seats {
-        rows.push(board_row(row, board.asof));
+    out.push_str(&grid(
+        &board_columns(board.goal_schema),
+        &board.seats,
+        board.asof,
+    ));
+    out.push_str(&unseated(board));
+    let mut entries = row_unknowns(&board.seats, |r| r.seat.as_str());
+    // a column the board does not show has no `?` to explain
+    if !board.goal_schema {
+        entries.retain(|(key, _)| {
+            key.split_once(' ')
+                .is_none_or(|(_, path)| !path.starts_with("goals"))
+        });
     }
-    out.push_str(&table(&rows));
-    // goals no row shows: claimed by an identity that is no seat
-    for u in board.unseated.get().into_iter().flatten() {
-        let _ = writeln!(
-            out,
-            "\n{} is claimed by '{}', which is not a seat; {}",
-            u.goal, u.owner, u.fix
-        );
-    }
-    let entries = row_reasons(board);
     if !entries.is_empty() {
         out.push('\n');
         out.push_str(&reasons(&entries));
@@ -450,18 +623,36 @@ pub fn board(board: &Board) -> String {
     out
 }
 
-/// Every unknown gauge on the board, as (`seat gauge`, reason).
-fn row_reasons(board: &Board) -> Vec<(String, String)> {
-    let json = serde_json::to_value(board).unwrap_or_default();
-    unknowns(&json)
-        .into_iter()
-        .filter_map(|(path, why)| {
-            let rest = path.strip_prefix("seats.")?;
-            let (i, gauge) = rest.split_once('.')?;
-            let seat = &board.seats.get(i.parse::<usize>().ok()?)?.seat;
-            Some((format!("{seat} {gauge}"), why))
-        })
-        .collect()
+/// Goals no row shows, claimed by an identity that is no seat: one line per
+/// identity, with how many and the fix (`--json` lists every goal).
+fn unseated(board: &Board) -> String {
+    let mut by_owner: BTreeMap<&str, Vec<&crate::fold::board::Unseated>> = BTreeMap::new();
+    for u in board.unseated.get().into_iter().flatten() {
+        by_owner.entry(u.owner.as_str()).or_default().push(u);
+    }
+    if by_owner.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n");
+    for (owner, goals) in by_owner {
+        let line = match goals.as_slice() {
+            [one] => format!(
+                "{} is claimed by '{owner}', which is not a seat; {}",
+                one.goal, one.fix
+            ),
+            [first, rest @ ..] => format!(
+                "{} goals ({}, +{}) are claimed by '{owner}', which is not a seat; {}",
+                goals.len(),
+                first.goal,
+                rest.len(),
+                board.unseated_fix
+            ),
+            [] => continue,
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]

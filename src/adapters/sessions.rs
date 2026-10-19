@@ -128,7 +128,7 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
         }
         Ok::<_, anyhow::Error>(all)
     })?;
-    let now = config.capture();
+    let now = config.capture()?;
     let gap = SignedDuration::from_mins(i64::from(sc.gap_minutes));
     // a directory that could not be listed held transcripts of unknown
     // seats: a gap for every seat, as an unreadable transcript is
@@ -140,13 +140,22 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
             // an unreadable transcript is a gap: whose sessions it held is
             // unknown, so every seat's effort is unknown while it stands
             Err(why) => {
-                events.push(crate::event::gap(
-                    now,
-                    &["session_active", "spawn"],
-                    file.display().to_string(),
-                    None,
-                    format!("{}: {why}", file.display()),
-                ));
+                let reason = format!("{}: {why}", file.display());
+                let kinds = &["session_active", "spawn"];
+                let source = file.display().to_string();
+                // its turns were all written before its last write: the gap
+                // stands over spans up to then, not over every window after
+                events.push(match last_write(&file) {
+                    Some(t) => crate::event::gap_over(
+                        crate::event::ALL_HISTORY,
+                        t,
+                        kinds,
+                        source,
+                        None,
+                        reason,
+                    ),
+                    None => crate::event::gap(now, kinds, source, None, reason),
+                });
                 continue;
             }
         };
@@ -166,6 +175,12 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
         scope.seat.as_deref(),
     ));
     Ok(events)
+}
+
+/// When a file was last written, if that can be read.
+fn last_write(file: &Path) -> Option<Timestamp> {
+    let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
+    Timestamp::try_from(modified).ok()
 }
 
 fn fresh(file: &Path, since: Option<Timestamp>) -> bool {

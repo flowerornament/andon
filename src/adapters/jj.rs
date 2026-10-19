@@ -104,7 +104,7 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
     // `since` (or all history) to now, the instant of capture
     out.push(crate::event::coverage(
         since.unwrap_or(crate::event::ALL_HISTORY),
-        Some(config.capture()),
+        Some(config.capture()?),
         &["land", "commit", "other:desk_create", "other:desk_remove"],
         source,
         None,

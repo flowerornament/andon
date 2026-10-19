@@ -30,6 +30,8 @@
     reason = "fixtures build the repositories and files andon reads"
 )]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use andon::adapters;
@@ -107,7 +109,7 @@ fn live_suites_reproduce_their_numbers() {
             continue;
         }
         let (config, ledger) = ledgers.entry(path.clone()).or_insert_with(|| {
-            let config = Config::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", suite.name));
+            let config = common::load(&path);
             let ledger =
                 adapters::collect(&config).unwrap_or_else(|e| panic!("{}: {e:#}", suite.name));
             (config, ledger)

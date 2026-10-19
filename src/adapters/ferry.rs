@@ -29,7 +29,7 @@ pub fn collect(config: &Config, fc: &FerryConfig) -> Result<Vec<Event>> {
     let mut events = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut duplicates = 0_usize;
-    let now = config.capture();
+    let now = config.capture()?;
     let mut reads = Reads::default();
     for pattern in &fc.receipts {
         // a directory the pattern passes through that cannot be listed: whose

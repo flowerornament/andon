@@ -4,6 +4,7 @@
 pub mod board;
 pub mod coverage;
 pub mod gauge;
+pub mod projection;
 pub mod scorecard;
 
 use std::collections::{BTreeMap, HashMap, HashSet};

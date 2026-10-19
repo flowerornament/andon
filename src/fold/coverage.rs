@@ -26,9 +26,9 @@ struct Gap {
     covers: Vec<String>,
     seat: Option<String>,
     reason: String,
-    /// The instant the unreadable fact was at, when the store said
-    /// (`event::gap_at`); `None` stands over every span.
-    at: Option<Timestamp>,
+    /// The span the unreadable facts lie in, when the store says
+    /// (`event::gap_at`, `event::gap_over`); `None` stands over every span.
+    within: Option<(Timestamp, Timestamp)>,
 }
 
 /// What the ledger covers.
@@ -60,7 +60,7 @@ impl Coverage {
                 Some(Outcome::Fail) => c.gaps.push(Gap {
                     covers,
                     seat: scope(e),
-                    at: (e.t_end == Some(e.t)).then_some(e.t),
+                    within: e.t_end.map(|end| (e.t, end)),
                     reason: e
                         .attr_str(attr::GAP_REASON)
                         .unwrap_or("unreadable")
@@ -162,7 +162,7 @@ impl Coverage {
             .iter()
             .filter(|g| {
                 g.covers.iter().any(|c| c == kind)
-                    && g.at.is_none_or(|at| from <= at && at <= to)
+                    && g.within.is_none_or(|(a, b)| a <= to && from <= b)
                     && match (&g.seat, seat) {
                         (None, _) | (_, None) => true,
                         (Some(scoped), Some(seat)) => scoped == seat,

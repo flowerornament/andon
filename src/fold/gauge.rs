@@ -103,10 +103,43 @@ pub enum Span {
     Origin,
 }
 
-/// A registered gauge: its path in the output and the kinds it reads.
+/// Where in an output a gauge sits: each scope is one or more roots in the
+/// JSON, and a gauge's output paths are its roots joined to its field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The board, beyond its rows.
+    Board,
+    /// A board row: `seats.<n>`.
+    Row,
+    /// The scorecard, beyond its cards.
+    Scorecard,
+    /// A scorecard card: a seat's (`seats.<seat>`), `total` and
+    /// `unattributed`.
+    Card,
+}
+
+impl Scope {
+    /// The output roots, `*` standing for any one key or index.
+    #[must_use]
+    pub const fn roots(self) -> &'static [&'static str] {
+        match self {
+            Self::Board | Self::Scorecard => &[""],
+            Self::Row => &["seats.*"],
+            Self::Card => &["seats.*", "total", "unattributed"],
+        }
+    }
+}
+
+/// A gauge: where it is in the output and the kinds it reads. A gauge is
+/// declared as a `Spec` constant beside the fold that computes it, and built
+/// only through it, so its output path, its kinds and its value cannot
+/// drift apart.
 #[derive(Debug, Clone, Copy)]
 pub struct Spec {
-    pub path: &'static str,
+    pub scope: Scope,
+    /// The field under each of the scope's roots, `*` for any key or index:
+    /// `landings`, `goals.*.used`, `flow.lead_n`.
+    pub field: &'static str,
     pub kinds: &'static [&'static str],
     /// Kinds read only for a single seat (a verdict reaches its seat through
     /// the reviewed commit, so a seat's verdicts need change starts too).
@@ -114,144 +147,121 @@ pub struct Spec {
     pub span: Span,
     /// Gauges this one is unknown with: it is computed over their values
     /// (findings over the goals held), so it reads what they read.
-    pub via: &'static [&'static str],
+    pub via: &'static [&'static Self],
+    /// Gauges at one path that read different kinds by what they count (a
+    /// budget spent in hours, runs or wall clock) differ by variant; the
+    /// first declared is the path's.
+    pub variant: &'static str,
 }
 
 impl Spec {
+    /// A gauge over `kinds` at `field` of `scope`.
+    #[must_use]
+    pub const fn new(
+        scope: Scope,
+        field: &'static str,
+        kinds: &'static [&'static str],
+        span: Span,
+    ) -> Self {
+        Self {
+            scope,
+            field,
+            kinds,
+            seat_kinds: &[],
+            span,
+            via: &[],
+            variant: "",
+        }
+    }
+
+    /// Also reading `kinds` for a single seat.
+    #[must_use]
+    pub const fn for_seat(mut self, kinds: &'static [&'static str]) -> Self {
+        self.seat_kinds = kinds;
+        self
+    }
+
+    /// Computed over `parents`' values.
+    #[must_use]
+    pub const fn over(mut self, parents: &'static [&'static Self]) -> Self {
+        self.via = parents;
+        self
+    }
+
+    /// A variant of the gauge at the same path.
+    #[must_use]
+    pub const fn variant(mut self, name: &'static str) -> Self {
+        self.variant = name;
+        self
+    }
+
     /// Whether this gauge reads `kind`, itself or through a gauge it is
     /// computed over; `seat` for a single seat's instance.
     #[must_use]
     pub fn reads(&self, kind: &str, seat: bool) -> bool {
         self.kinds.contains(&kind)
             || (seat && self.seat_kinds.contains(&kind))
-            || self
-                .via
-                .iter()
-                .filter_map(|p| registered(p))
-                .any(|s| s.reads(kind, seat))
+            || self.via.iter().any(|s| s.reads(kind, seat))
+    }
+
+    /// Whether `path`, a path in the output, is an instance of this gauge.
+    #[must_use]
+    pub fn at(&self, path: &str) -> bool {
+        self.scope.roots().iter().any(|root| {
+            let pattern = if root.is_empty() {
+                self.field.to_owned()
+            } else {
+                format!("{root}.{}", self.field)
+            };
+            matches(&pattern, path)
+        })
+    }
+
+    /// The gauge's name in a reason: its field's first word (`goals.*.used`
+    /// is the budget).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        if self.field.rsplit('.').next() == Some("used") {
+            "budget"
+        } else {
+            self.field.split('.').next().unwrap_or(self.field)
+        }
     }
 }
 
-const fn spec(path: &'static str, kinds: &'static [&'static str], span: Span) -> Spec {
-    Spec {
-        path,
-        kinds,
-        seat_kinds: &[],
-        span,
-        via: &[],
+/// A dotted path against a pattern whose `*` segments match any one segment.
+fn matches(pattern: &str, path: &str) -> bool {
+    let (mut p, mut q) = (pattern.split('.'), path.split('.'));
+    loop {
+        match (p.next(), q.next()) {
+            (None, None) => return true,
+            (Some(a), Some(b)) if a == "*" || a == b => {}
+            _ => return false,
+        }
     }
 }
 
-const fn via(
-    path: &'static str,
-    kinds: &'static [&'static str],
-    via: &'static [&'static str],
-) -> Spec {
-    Spec {
-        path,
-        kinds,
-        seat_kinds: &[],
-        span: Span::Origin,
-        via,
-    }
-}
+/// The tracker's kinds: what a goal's state is read from.
+pub const TRACKER: &[&str] = &["create", "claim", "close"];
 
-const TRACKER: &[&str] = &["create", "claim", "close"];
-
-/// Every gauge the scorecard and board can print. A gauge not here cannot be
-/// built ([`Gauger::gauge`] makes it unknown), and the property test checks
-/// that every gauge in the output is here.
-pub const REGISTRY: &[Spec] = &[
-    // a seat card (and the total and unattributed cards)
-    spec("card.landings", &["land"], Span::Window),
-    spec("card.runs", &["run"], Span::Window),
-    spec("card.runs_per_landing", &["run", "land"], Span::Window),
-    spec("card.gate_runs", &["gate_run"], Span::Window),
-    Spec {
-        path: "card.verdicts_go",
-        kinds: &["verdict"],
-        seat_kinds: &["commit"],
-        span: Span::Window,
-        via: &[],
-    },
-    Spec {
-        path: "card.verdicts_return",
-        kinds: &["verdict"],
-        seat_kinds: &["commit"],
-        span: Span::Window,
-        via: &[],
-    },
-    spec("card.messages_sent", &["message"], Span::Window),
-    spec("card.messages_received", &["message"], Span::Window),
-    spec("card.messages_naming_goal", &["message"], Span::Window),
-    spec("card.decisions_without_goal", &["message"], Span::Window),
-    spec("card.items_created", &["create"], Span::Window),
-    spec("card.wip_at_end", TRACKER, Span::State),
-    spec("card.active_hours", &["session_active"], Span::Window),
-    // scorecard-wide
-    spec("flow.lead_median_min", &["land", "commit"], Span::Window),
-    spec("flow.lead_n", &["land", "commit"], Span::Window),
-    spec(
-        "flow.review_median_min",
-        &["land", "verdict", "commit"],
-        Span::Window,
-    ),
-    spec(
-        "flow.review_n",
-        &["land", "verdict", "commit"],
-        Span::Window,
-    ),
-    spec("flow.gate_median_min", &["gate_run"], Span::Window),
-    spec("flow.gate_n", &["gate_run"], Span::Window),
-    spec("tracker.created", &["create"], Span::Window),
-    spec("tracker.closed", &["close"], Span::Window),
-    spec("tracker.branching", &["create", "close"], Span::Window),
-    spec("tracker.open_at_end", TRACKER, Span::State),
-    spec("tracker.unowned_at_end", TRACKER, Span::State),
-    spec("hub", &["message"], Span::Window),
-    spec("joins.landings", &["land"], Span::Window),
-    spec("joins.landing_session", &["land"], Span::Window),
-    spec(
-        "joins.landing_session_seen",
-        &["land", "session_active"],
-        Span::Window,
-    ),
-    spec(
-        "joins.landings_citing_verdict",
-        &["land", "verdict"],
-        Span::Window,
-    ),
-    spec("joins.cites", &["land"], Span::Window),
-    spec("joins.cites_resolved", &["land", "verdict"], Span::Window),
-    spec("joins.runs", &["run"], Span::Window),
-    spec("joins.runs_attributed", &["run"], Span::Window),
-    spec("runs_by_repo", &["run"], Span::Window),
-    // the board, beyond its rows
-    spec("board.unseated", TRACKER, Span::State),
-    // a board row
-    spec("row.goals", TRACKER, Span::State),
-    spec("row.landings", &["land"], Span::Window),
-    spec("row.last_land", &["land"], Span::Origin),
-    spec("row.runs", &["run"], Span::Window),
-    spec("row.runs_pass", &["run"], Span::Window),
-    spec("row.runs_since_land", &["run", "land"], Span::Origin),
-    Spec {
-        path: "row.last_verdict",
-        kinds: &["verdict"],
-        seat_kinds: &["commit"],
-        span: Span::Origin,
-        via: &[],
-    },
-    via("row.findings", &["other:comment"], &["row.goals"]),
-    via("row.goals.used", &["session_active"], &["row.goals"]),
-    via("row.goals.used.runs", &["run"], &["row.goals"]),
-    via("row.goals.used.wall", &[], &["row.goals"]),
-];
-
-/// The spec registered at `path`.
+/// Every gauge the board and the scorecard can print.
 #[must_use]
-pub fn registered(path: &str) -> Option<&'static Spec> {
-    REGISTRY.iter().find(|s| s.path == path)
+pub fn all() -> Vec<&'static Spec> {
+    crate::fold::board::SPECS
+        .iter()
+        .chain(crate::fold::scorecard::SPECS)
+        .copied()
+        .collect()
+}
+
+/// The gauge an output path is an instance of, in the board's output or
+/// the scorecard's.
+#[must_use]
+pub fn spec_at(board: bool, path: &str) -> Option<&'static Spec> {
+    all()
+        .into_iter()
+        .filter(|s| matches!(s.scope, Scope::Board | Scope::Row) == board)
+        .find(|s| s.at(path))
 }
 
 /// Builds gauges against one ledger's coverage, over one window and instant.
@@ -262,19 +272,16 @@ pub struct Gauger<'a> {
 }
 
 impl Gauger<'_> {
-    /// The registered gauge at `path` for `seat` (`None`: every seat), its
-    /// value `v` when every kind it reads is covered; `origin` is where a
-    /// [`Span::Origin`] gauge reads from (`None`: it cannot be known).
+    /// The gauge `spec` for `seat` (`None`: every seat), its value `v` when
+    /// every kind it reads is covered; `origin` is where a [`Span::Origin`]
+    /// gauge reads from (`None`: it cannot be known).
     pub fn gauge<T>(
         &self,
-        path: &str,
+        spec: &Spec,
         seat: Option<&str>,
         origin: Option<Timestamp>,
         v: T,
     ) -> Gauge<T> {
-        let Some(spec) = registered(path) else {
-            return Gauge::unknown(format!("{path} is not a registered gauge"));
-        };
         let mut kinds: Vec<&str> = spec.kinds.to_vec();
         if seat.is_some() {
             kinds.extend(spec.seat_kinds);
@@ -298,7 +305,7 @@ impl Gauger<'_> {
                         .unwrap_or_else(|| {
                             format!(
                                 "{} has no start before the instant to count from",
-                                spec.path
+                                spec.field
                             )
                         });
                     return Gauge::unknown(why);
@@ -310,26 +317,27 @@ impl Gauger<'_> {
             Some(why) => Gauge::unknown(why),
         }
     }
-}
 
-impl Gauger<'_> {
     /// A gauge computed over `parent`'s value (findings over the goals
     /// held): unknown with the parent's reason when the parent is, else as
     /// [`Self::gauge`]. Its spec must name the parent in `via`.
     pub fn over<U, T>(
         &self,
         parent: &Gauge<U>,
-        path: &str,
+        spec: &Spec,
         seat: Option<&str>,
         origin: Option<Timestamp>,
         v: T,
     ) -> Gauge<T> {
-        if registered(path).is_none_or(|s| s.via.is_empty()) {
-            return Gauge::unknown(format!("{path} is not registered as computed over a gauge"));
+        if spec.via.is_empty() {
+            return Gauge::unknown(format!(
+                "{} is not declared as computed over a gauge",
+                spec.field
+            ));
         }
         match parent.reason() {
             Some(why) => Gauge::unknown(why.to_owned()),
-            None => self.gauge(path, seat, origin, v),
+            None => self.gauge(spec, seat, origin, v),
         }
     }
 }
@@ -391,23 +399,42 @@ mod tests {
     /// A gauge that reads no kind is never unknown for want of coverage, so
     /// it must be declared: today only wall-clock budget, which is the
     /// claim's age and is unknown with the goals held.
-    const KINDLESS: &[&str] = &["row.goals.used.wall"];
+    const KINDLESS: &[(&str, &str)] = &[("goals.*.used", "wall-clock")];
 
     #[test]
     fn a_gauge_that_reads_no_kind_is_declared() {
-        for spec in REGISTRY {
+        for spec in all() {
             if spec.kinds.is_empty() {
-                assert!(KINDLESS.contains(&spec.path), "{} reads no kind", spec.path);
+                assert!(
+                    KINDLESS.contains(&(spec.field, spec.variant)),
+                    "{} reads no kind",
+                    spec.field
+                );
             }
         }
     }
 
     #[test]
-    fn every_registered_path_is_unique() {
-        let mut paths: Vec<&str> = REGISTRY.iter().map(|s| s.path).collect();
-        paths.sort_unstable();
+    fn every_gauge_has_its_own_path() {
+        let mut paths: Vec<(bool, &str, &str)> = all()
+            .iter()
+            .map(|s| (matches!(s.scope, Scope::Card), s.field, s.variant))
+            .collect();
         let n = paths.len();
+        paths.sort_unstable();
         paths.dedup();
         assert_eq!(paths.len(), n);
+    }
+
+    #[test]
+    fn a_path_matches_its_gauge_at_every_root() {
+        const CARD: Spec = Spec::new(Scope::Card, "landings", &["land"], Span::Window);
+        const USED: Spec = Spec::new(Scope::Row, "goals.*.used", &[], Span::Origin);
+        assert!(CARD.at("seats.x-1a.landings"));
+        assert!(CARD.at("total.landings"));
+        assert!(CARD.at("unattributed.landings"));
+        assert!(!CARD.at("flow.landings"));
+        assert!(USED.at("seats.3.goals.0.used"));
+        assert_eq!(USED.name(), "budget");
     }
 }

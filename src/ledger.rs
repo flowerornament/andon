@@ -117,6 +117,16 @@ impl Ledger {
         Ok(Self::new(events))
     }
 
+    /// Read a kept ledger file.
+    ///
+    /// # Errors
+    /// When the file cannot be read or a line is not an event.
+    pub fn open(path: &std::path::Path) -> Result<Self> {
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("cannot read ledger {}", path.display()))?;
+        Self::read(std::io::BufReader::new(file))
+    }
+
     /// Write as JSONL, one event per line.
     ///
     /// # Errors

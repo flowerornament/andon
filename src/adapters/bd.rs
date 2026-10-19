@@ -62,7 +62,7 @@ pub fn collect(config: &Config, bc: &BdConfig) -> Result<Vec<Event>> {
     // a goal reopened since leaves no trace, and 232 of one tracker's goals
     // were closed more than once. So the export vouches for them only as the
     // state at the capture instant, and only when it is whole (no `since`)
-    let now = config.capture();
+    let now = config.capture()?;
     let mut covers = vec!["create", "other:comment"];
     if bc.verdicts.is_some() {
         covers.push("verdict");
@@ -100,7 +100,7 @@ pub fn issue_events(
     let Some(id) = text(issue, "id") else {
         // an issue andon cannot name: its goal, claim and close are unknown
         out.push(crate::event::gap(
-            config.capture(),
+            config.capture()?,
             &["create", "state:create", "state:claim", "state:close"],
             source.to_owned(),
             None,
@@ -173,7 +173,7 @@ pub fn issue_events(
     }
 
     for comment in issue["comments"].as_array().into_iter().flatten() {
-        out.push(comment_event(comment, id, bc, source, config.capture())?);
+        out.push(comment_event(comment, id, bc, source, config.capture()?)?);
     }
     Ok(out)
 }
@@ -360,8 +360,12 @@ mod tests {
 
     #[test]
     fn an_export_yields_create_claim_close_comment_and_verdict() {
-        let events = from_export(EXPORT, &Config::default(), &bc(), Path::new("."))
-            .unwrap_or_else(|e| panic!("{e}"));
+        let config = Config {
+            capture: Some(jiff::Timestamp::UNIX_EPOCH),
+            ..Config::default()
+        };
+        let events =
+            from_export(EXPORT, &config, &bc(), Path::new(".")).unwrap_or_else(|e| panic!("{e}"));
         let kinds: Vec<String> = events.iter().map(|e| e.kind.to_string()).collect();
         assert_eq!(
             kinds,

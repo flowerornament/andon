@@ -102,7 +102,7 @@ pub fn collect(config: &Config, gc: &GitConfig) -> Result<Vec<Event>> {
     // what this read covers: the trunk from `since` (or all history) to now
     out.push(crate::event::coverage(
         from.unwrap_or(crate::event::ALL_HISTORY),
-        Some(config.capture()),
+        Some(config.capture()?),
         &["land", "commit"],
         source,
         None,

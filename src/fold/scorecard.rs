@@ -19,10 +19,183 @@ use crate::config::Config;
 use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::fold::coverage::Coverage;
-use crate::fold::gauge::{Gauge, Gauger};
+use crate::fold::gauge::{Gauge, Gauger, Scope, Span, Spec, TRACKER};
+use crate::fold::projection::{Projection, held, session_minutes};
 use crate::fold::{Index, median, ratio, round2};
 use crate::ledger::Ledger;
 use crate::time::{Window, minutes};
+
+/// The scorecard's gauges, each declared beside the fold that computes it
+/// and listed in [`SPECS`].
+pub const CARD_LANDINGS: Spec = Spec::new(Scope::Card, "landings", &["land"], Span::Window);
+pub const CARD_RUNS: Spec = Spec::new(Scope::Card, "runs", &["run"], Span::Window);
+pub const CARD_RUNS_PER_LANDING: Spec = Spec::new(
+    Scope::Card,
+    "runs_per_landing",
+    &["run", "land"],
+    Span::Window,
+);
+pub const CARD_GATE_RUNS: Spec = Spec::new(Scope::Card, "gate_runs", &["gate_run"], Span::Window);
+pub const CARD_VERDICTS_GO: Spec =
+    Spec::new(Scope::Card, "verdicts_go", &["verdict"], Span::Window).for_seat(&["commit"]);
+pub const CARD_VERDICTS_RETURN: Spec =
+    Spec::new(Scope::Card, "verdicts_return", &["verdict"], Span::Window).for_seat(&["commit"]);
+pub const CARD_MESSAGES_SENT: Spec =
+    Spec::new(Scope::Card, "messages_sent", &["message"], Span::Window);
+pub const CARD_MESSAGES_RECEIVED: Spec =
+    Spec::new(Scope::Card, "messages_received", &["message"], Span::Window);
+pub const CARD_MESSAGES_NAMING_GOAL: Spec = Spec::new(
+    Scope::Card,
+    "messages_naming_goal",
+    &["message"],
+    Span::Window,
+);
+pub const CARD_DECISIONS_WITHOUT_GOAL: Spec = Spec::new(
+    Scope::Card,
+    "decisions_without_goal",
+    &["message"],
+    Span::Window,
+);
+pub const CARD_ITEMS_CREATED: Spec =
+    Spec::new(Scope::Card, "items_created", &["create"], Span::Window);
+pub const CARD_WIP_AT_END: Spec = Spec::new(Scope::Card, "wip_at_end", TRACKER, Span::State);
+pub const CARD_ACTIVE_HOURS: Spec = Spec::new(
+    Scope::Card,
+    "active_hours",
+    &["session_active"],
+    Span::Window,
+);
+pub const FLOW_LEAD_MEDIAN_MIN: Spec = Spec::new(
+    Scope::Scorecard,
+    "flow.lead_median_min",
+    &["land", "commit"],
+    Span::Window,
+);
+pub const FLOW_LEAD_N: Spec = Spec::new(
+    Scope::Scorecard,
+    "flow.lead_n",
+    &["land", "commit"],
+    Span::Window,
+);
+pub const FLOW_REVIEW_MEDIAN_MIN: Spec = Spec::new(
+    Scope::Scorecard,
+    "flow.review_median_min",
+    &["land", "verdict", "commit"],
+    Span::Window,
+);
+pub const FLOW_REVIEW_N: Spec = Spec::new(
+    Scope::Scorecard,
+    "flow.review_n",
+    &["land", "verdict", "commit"],
+    Span::Window,
+);
+pub const FLOW_GATE_MEDIAN_MIN: Spec = Spec::new(
+    Scope::Scorecard,
+    "flow.gate_median_min",
+    &["gate_run"],
+    Span::Window,
+);
+pub const FLOW_GATE_N: Spec =
+    Spec::new(Scope::Scorecard, "flow.gate_n", &["gate_run"], Span::Window);
+pub const TRACKER_CREATED: Spec = Spec::new(
+    Scope::Scorecard,
+    "tracker.created",
+    &["create"],
+    Span::Window,
+);
+pub const TRACKER_CLOSED: Spec =
+    Spec::new(Scope::Scorecard, "tracker.closed", &["close"], Span::Window);
+pub const TRACKER_BRANCHING: Spec = Spec::new(
+    Scope::Scorecard,
+    "tracker.branching",
+    &["create", "close"],
+    Span::Window,
+);
+pub const TRACKER_OPEN_AT_END: Spec = Spec::new(
+    Scope::Scorecard,
+    "tracker.open_at_end",
+    TRACKER,
+    Span::State,
+);
+pub const TRACKER_UNOWNED_AT_END: Spec = Spec::new(
+    Scope::Scorecard,
+    "tracker.unowned_at_end",
+    TRACKER,
+    Span::State,
+);
+pub const HUB: Spec = Spec::new(Scope::Scorecard, "hub", &["message"], Span::Window);
+pub const JOINS_LANDINGS: Spec =
+    Spec::new(Scope::Scorecard, "joins.landings", &["land"], Span::Window);
+pub const JOINS_LANDING_SESSION: Spec = Spec::new(
+    Scope::Scorecard,
+    "joins.landing_session",
+    &["land"],
+    Span::Window,
+);
+pub const JOINS_LANDING_SESSION_SEEN: Spec = Spec::new(
+    Scope::Scorecard,
+    "joins.landing_session_seen",
+    &["land", "session_active"],
+    Span::Window,
+);
+pub const JOINS_LANDINGS_CITING_VERDICT: Spec = Spec::new(
+    Scope::Scorecard,
+    "joins.landings_citing_verdict",
+    &["land", "verdict"],
+    Span::Window,
+);
+pub const JOINS_CITES: Spec = Spec::new(Scope::Scorecard, "joins.cites", &["land"], Span::Window);
+pub const JOINS_CITES_RESOLVED: Spec = Spec::new(
+    Scope::Scorecard,
+    "joins.cites_resolved",
+    &["land", "verdict"],
+    Span::Window,
+);
+pub const JOINS_RUNS: Spec = Spec::new(Scope::Scorecard, "joins.runs", &["run"], Span::Window);
+pub const JOINS_RUNS_ATTRIBUTED: Spec = Spec::new(
+    Scope::Scorecard,
+    "joins.runs_attributed",
+    &["run"],
+    Span::Window,
+);
+pub const RUNS_BY_REPO: Spec = Spec::new(Scope::Scorecard, "runs_by_repo", &["run"], Span::Window);
+
+pub const SPECS: &[&Spec] = &[
+    &CARD_LANDINGS,
+    &CARD_RUNS,
+    &CARD_RUNS_PER_LANDING,
+    &CARD_GATE_RUNS,
+    &CARD_VERDICTS_GO,
+    &CARD_VERDICTS_RETURN,
+    &CARD_MESSAGES_SENT,
+    &CARD_MESSAGES_RECEIVED,
+    &CARD_MESSAGES_NAMING_GOAL,
+    &CARD_DECISIONS_WITHOUT_GOAL,
+    &CARD_ITEMS_CREATED,
+    &CARD_WIP_AT_END,
+    &CARD_ACTIVE_HOURS,
+    &FLOW_LEAD_MEDIAN_MIN,
+    &FLOW_LEAD_N,
+    &FLOW_REVIEW_MEDIAN_MIN,
+    &FLOW_REVIEW_N,
+    &FLOW_GATE_MEDIAN_MIN,
+    &FLOW_GATE_N,
+    &TRACKER_CREATED,
+    &TRACKER_CLOSED,
+    &TRACKER_BRANCHING,
+    &TRACKER_OPEN_AT_END,
+    &TRACKER_UNOWNED_AT_END,
+    &HUB,
+    &JOINS_LANDINGS,
+    &JOINS_LANDING_SESSION,
+    &JOINS_LANDING_SESSION_SEEN,
+    &JOINS_LANDINGS_CITING_VERDICT,
+    &JOINS_CITES,
+    &JOINS_CITES_RESOLVED,
+    &JOINS_RUNS,
+    &JOINS_RUNS_ATTRIBUTED,
+    &RUNS_BY_REPO,
+];
 
 /// A scorecard over one window. Every gauge is a [`Gauge`]: known, or
 /// unknown with the reason, never a 0 where the ledger could not look.
@@ -51,6 +224,9 @@ pub struct Scorecard {
 /// The gauges for one seat, or a total.
 #[derive(Debug, Clone, Serialize)]
 pub struct SeatCard {
+    /// The row's name: the seat, `total` or `(unattributed)`.
+    #[serde(skip)]
+    pub name: String,
     /// A seat from `[seats]`, shown even when idle; others only when active.
     #[serde(skip)]
     pub configured: bool,
@@ -137,39 +313,40 @@ fn publish(raw: Raw, coverage: &Coverage, window: Window) -> Scorecard {
         from: window.from,
         to: window.to,
     };
-    let card = |t: Tally, wip: usize, seat: Option<&str>| SeatCard {
+    let card = |name: &str, t: Tally, wip: usize, seat: Option<&str>| SeatCard {
+        name: name.to_owned(),
         configured: t.configured,
         active: t.active(),
-        landings: g.gauge("card.landings", seat, None, t.landings),
-        runs_per_landing: g.gauge("card.runs_per_landing", seat, None, t.runs_per_landing),
-        runs: g.gauge("card.runs", seat, None, t.runs),
-        gate_runs: g.gauge("card.gate_runs", seat, None, t.gate_runs),
-        verdicts_go: g.gauge("card.verdicts_go", seat, None, t.verdicts_go),
-        verdicts_return: g.gauge("card.verdicts_return", seat, None, t.verdicts_return),
-        messages_sent: g.gauge("card.messages_sent", seat, None, t.messages_sent),
-        messages_received: g.gauge("card.messages_received", seat, None, t.messages_received),
+        landings: g.gauge(&CARD_LANDINGS, seat, None, t.landings),
+        runs_per_landing: g.gauge(&CARD_RUNS_PER_LANDING, seat, None, t.runs_per_landing),
+        runs: g.gauge(&CARD_RUNS, seat, None, t.runs),
+        gate_runs: g.gauge(&CARD_GATE_RUNS, seat, None, t.gate_runs),
+        verdicts_go: g.gauge(&CARD_VERDICTS_GO, seat, None, t.verdicts_go),
+        verdicts_return: g.gauge(&CARD_VERDICTS_RETURN, seat, None, t.verdicts_return),
+        messages_sent: g.gauge(&CARD_MESSAGES_SENT, seat, None, t.messages_sent),
+        messages_received: g.gauge(&CARD_MESSAGES_RECEIVED, seat, None, t.messages_received),
         messages_naming_goal: g.gauge(
-            "card.messages_naming_goal",
+            &CARD_MESSAGES_NAMING_GOAL,
             seat,
             None,
             t.messages_naming_goal,
         ),
         decisions_without_goal: g.gauge(
-            "card.decisions_without_goal",
+            &CARD_DECISIONS_WITHOUT_GOAL,
             seat,
             None,
             t.decisions_without_goal,
         ),
-        items_created: g.gauge("card.items_created", seat, None, t.items_created),
-        wip_at_end: g.gauge("card.wip_at_end", seat, None, wip),
-        active_hours: g.gauge("card.active_hours", seat, None, t.active_hours),
+        items_created: g.gauge(&CARD_ITEMS_CREATED, seat, None, t.items_created),
+        wip_at_end: g.gauge(&CARD_WIP_AT_END, seat, None, wip),
+        active_hours: g.gauge(&CARD_ACTIVE_HOURS, seat, None, t.active_hours),
     };
     let seats = raw
         .seats
         .into_iter()
         .map(|(s, t)| {
             let wip = t.wip_at_end;
-            let c = card(t, wip, Some(s.as_str()));
+            let c = card(&s, t, wip, Some(s.as_str()));
             (s, c)
         })
         .collect();
@@ -183,47 +360,52 @@ fn publish(raw: Raw, coverage: &Coverage, window: Window) -> Scorecard {
         asked_to: window.asked_to,
         days: round2(window.length_days()),
         seats,
-        total: card(raw.total, raw.wip_total, None),
+        total: card("total", raw.total, raw.wip_total, None),
         // whether a verdict could be attributed depends on change starts, as
         // a seat's does: the unattributed card reads what a seat's reads
-        unattributed: card(raw.unattributed, raw.wip_unattributed, Some(UNATTRIBUTED)),
+        unattributed: card(
+            UNATTRIBUTED,
+            raw.unattributed,
+            raw.wip_unattributed,
+            Some(UNATTRIBUTED),
+        ),
         flow: Flow {
-            lead_median_min: g.gauge("flow.lead_median_min", None, None, f.lead_median_min),
-            lead_n: g.gauge("flow.lead_n", None, None, f.lead_n),
-            review_median_min: g.gauge("flow.review_median_min", None, None, f.review_median_min),
-            review_n: g.gauge("flow.review_n", None, None, f.review_n),
-            gate_median_min: g.gauge("flow.gate_median_min", None, None, f.gate_median_min),
-            gate_n: g.gauge("flow.gate_n", None, None, f.gate_n),
+            lead_median_min: g.gauge(&FLOW_LEAD_MEDIAN_MIN, None, None, f.lead_median_min),
+            lead_n: g.gauge(&FLOW_LEAD_N, None, None, f.lead_n),
+            review_median_min: g.gauge(&FLOW_REVIEW_MEDIAN_MIN, None, None, f.review_median_min),
+            review_n: g.gauge(&FLOW_REVIEW_N, None, None, f.review_n),
+            gate_median_min: g.gauge(&FLOW_GATE_MEDIAN_MIN, None, None, f.gate_median_min),
+            gate_n: g.gauge(&FLOW_GATE_N, None, None, f.gate_n),
         },
         tracker: Tracker {
-            created: g.gauge("tracker.created", None, None, t.created),
-            closed: g.gauge("tracker.closed", None, None, t.closed),
-            branching: g.gauge("tracker.branching", None, None, t.branching),
-            open_at_end: g.gauge("tracker.open_at_end", None, None, t.open_at_end),
-            unowned_at_end: g.gauge("tracker.unowned_at_end", None, None, t.unowned_at_end),
+            created: g.gauge(&TRACKER_CREATED, None, None, t.created),
+            closed: g.gauge(&TRACKER_CLOSED, None, None, t.closed),
+            branching: g.gauge(&TRACKER_BRANCHING, None, None, t.branching),
+            open_at_end: g.gauge(&TRACKER_OPEN_AT_END, None, None, t.open_at_end),
+            unowned_at_end: g.gauge(&TRACKER_UNOWNED_AT_END, None, None, t.unowned_at_end),
         },
-        hub: g.gauge("hub", None, None, raw.hub),
+        hub: g.gauge(&HUB, None, None, raw.hub),
         joins: Joins {
-            landings: g.gauge("joins.landings", None, None, j.landings),
-            landing_session: g.gauge("joins.landing_session", None, None, j.landing_session),
+            landings: g.gauge(&JOINS_LANDINGS, None, None, j.landings),
+            landing_session: g.gauge(&JOINS_LANDING_SESSION, None, None, j.landing_session),
             landing_session_seen: g.gauge(
-                "joins.landing_session_seen",
+                &JOINS_LANDING_SESSION_SEEN,
                 None,
                 None,
                 j.landing_session_seen,
             ),
             landings_citing_verdict: g.gauge(
-                "joins.landings_citing_verdict",
+                &JOINS_LANDINGS_CITING_VERDICT,
                 None,
                 None,
                 j.landings_citing_verdict,
             ),
-            cites: g.gauge("joins.cites", None, None, j.cites),
-            cites_resolved: g.gauge("joins.cites_resolved", None, None, j.cites_resolved),
-            runs: g.gauge("joins.runs", None, None, j.runs),
-            runs_attributed: g.gauge("joins.runs_attributed", None, None, j.runs_attributed),
+            cites: g.gauge(&JOINS_CITES, None, None, j.cites),
+            cites_resolved: g.gauge(&JOINS_CITES_RESOLVED, None, None, j.cites_resolved),
+            runs: g.gauge(&JOINS_RUNS, None, None, j.runs),
+            runs_attributed: g.gauge(&JOINS_RUNS_ATTRIBUTED, None, None, j.runs_attributed),
         },
-        runs_by_repo: g.gauge("runs_by_repo", None, None, raw.runs_by_repo),
+        runs_by_repo: g.gauge(&RUNS_BY_REPO, None, None, raw.runs_by_repo),
     }
 }
 
@@ -321,7 +503,8 @@ pub struct JoinsRaw {
 /// Fold a scorecard.
 #[must_use]
 pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard {
-    let index = Index::new(ledger);
+    let p = Projection::new(ledger, config);
+    let index = &p.index;
     let decisions: BTreeSet<&str> = config
         .messages
         .decision_kinds
@@ -371,7 +554,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
         }
     }
     active_hours(ledger, window, &mut seats, &mut total, &mut unattributed);
-    let (joins, runs_by_repo) = joins(ledger, &index, window);
+    let (joins, runs_by_repo) = joins(ledger, index, window);
 
     // goals in progress at the end of the window
     let state = index.items_at(window.to);
@@ -385,21 +568,18 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
             }
         }
     }
-    for item in state.values() {
-        if item.closed {
-            continue;
-        }
+    for item in state.values().filter(|i| !i.closed) {
         tracker.open_at_end += 1;
-        match &item.owner {
-            None => tracker.unowned_at_end += 1,
-            Some(owner) => {
-                if item.in_progress(config)
-                    && let Some(card) = seats.get_mut(owner)
-                {
-                    card.wip_at_end += 1;
-                }
-            }
+        if item.owner.is_none() {
+            tracker.unowned_at_end += 1;
         }
+    }
+    // a seat's goals in progress are the goals it holds, as the board reads
+    // them, of a type that counts
+    for (seat, card) in &mut seats {
+        card.wip_at_end = held(&state, seat)
+            .filter(|(_, i)| i.in_progress(config))
+            .count();
     }
     tracker.branching = ratio(tracker.created, tracker.closed);
 
@@ -408,7 +588,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
         card.active_hours = round2(card.active_hours);
     }
 
-    let flow = flow(&index, window);
+    let flow = flow(&p, window);
     let hub = hub(ledger, config, window, &decisions);
 
     let raw = Raw {
@@ -423,7 +603,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
         wip_total,
         wip_unattributed,
     };
-    publish(raw, &Coverage::new(ledger), window)
+    publish(raw, &p.coverage, window)
 }
 
 /// Session hours: the part of each span inside the window.
@@ -435,15 +615,11 @@ fn active_hours(
     unattributed: &mut Tally,
 ) {
     for event in ledger.events() {
-        if event.kind != Kind::SessionActive {
+        let minutes = session_minutes(event, window.from, window.to);
+        if minutes <= 0.0 {
             continue;
         }
-        let start = event.t.max(window.from);
-        let end = event.t_end.unwrap_or(event.t).min(window.to);
-        if end <= start {
-            continue;
-        }
-        let hours = minutes(start, end) / 60.0;
+        let hours = minutes / 60.0;
         total.active_hours += hours;
         match &event.seat {
             Some(seat) => seats.entry(seat.clone()).or_default().active_hours += hours,
@@ -565,7 +741,8 @@ fn count_run(counts: &mut RunCounts, event: &Event) {
     }
 }
 
-fn flow(index: &Index<'_>, window: Window) -> FlowRaw {
+fn flow(p: &Projection<'_>, window: Window) -> FlowRaw {
+    let index = &p.index;
     let mut lead = Vec::new();
     let mut review = Vec::new();
     for land in index.lands.iter().filter(|e| window.contains(e.t)) {
@@ -587,7 +764,7 @@ fn flow(index: &Index<'_>, window: Window) -> FlowRaw {
         .gate_runs
         .iter()
         .filter(|g| window.contains(g.t))
-        .filter(|g| g.attr_str(attr::RECIPE) == Some("land") && g.outcome == Some(Outcome::Pass))
+        .filter(|g| p.is_land_gate(g) && g.outcome == Some(Outcome::Pass))
         .filter_map(|g| g.t_end.map(|end| minutes(g.t, end)))
         .collect();
     FlowRaw {

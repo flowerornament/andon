@@ -58,7 +58,7 @@ pub fn collect(config: &Config, gc: &GithubConfig) -> Result<Vec<Event>> {
         &snapshot,
         gc,
         &format!("github {}", gc.repo),
-        config.capture(),
+        config.capture()?,
         &config.goal.fields,
     )
 }

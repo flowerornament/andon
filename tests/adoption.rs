@@ -84,6 +84,7 @@ fn ledger(seat: &str) -> String {
 const CONFIG: &str = r#"
 [project]
 goal_pattern = '\bdemo-[a-z0-9]{3}\b'
+[goal]
 [seats.demo-1a]
 [seats.demo-1b]
 [adapters.jj]
@@ -193,7 +194,8 @@ fn a_section_can_come_from_a_tracker_field() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let issue = r###"{"id":"demo-abc","title":"t","description":"## Why\n\nbecause\n\n## Budget\n\n2 agent-hours\n","acceptance_criteria":"Done when: `cargo test` passes","status":"open","created_at":"2026-10-13T09:00:00Z"}"###;
     let path = bd_shim(dir.path(), &[issue]);
-    let config = "[project]\ngoal_pattern = '\\bdemo-[a-z0-9]{3}\\b'\n[adapters.bd]\ndir = \".\"\n";
+    let config =
+        "[project]\ngoal_pattern = '\\bdemo-[a-z0-9]{3}\\b'\n[goal]\n[adapters.bd]\ndir = \".\"\n";
     std::fs::write(dir.path().join("andon.toml"), config).unwrap_or_else(|e| panic!("{e}"));
     let before = run(dir.path(), &path, &["check", "goal", "demo-abc"]);
     assert_eq!(

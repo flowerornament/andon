@@ -105,7 +105,9 @@ A goal section kept in a tracker field rather than the description is mapped in 
 "Done when" = "acceptance_criteria"
 ```
 
-A scorecard window that ends after now counts up to now and says so. Exit codes: 0 rendered or passed; 1 a check refused; 2 andon could not decide (the line says what to repair). `andon hook` reads a Claude Code or Codex hook payload on stdin and never fails the session.
+With no `[goal]` section, andon applies no goal schema: `check goal` and `check commit` pass with a note, and the board shows no goal or budget columns. `andon init` declares `[goal]`. The land verb's gate recipe is `[project] land_recipe` (default `land`).
+
+A scorecard window that ends after now counts up to now and says so. `--json` and the hook's line follow a versioned contract (`.design/2026-10-19-output-contract.md`). Exit codes: 0 rendered or passed; 1 a check refused; 2 andon could not decide (the line says what to repair). `andon hook` reads a Claude Code or Codex hook payload on stdin and never fails the session.
 
 ## Adapters
 

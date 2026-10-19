@@ -8,6 +8,8 @@
     reason = "fixtures build the repositories and files andon reads"
 )]
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -16,7 +18,7 @@ use andon::config::Config;
 use andon::event::attr;
 use andon::event::{ALL_HISTORY, Event, Kind, Outcome, coverage, gap};
 use andon::fold::board::board;
-use andon::fold::gauge::{Spec, registered};
+use andon::fold::gauge::{Spec, spec_at};
 use andon::fold::scorecard::scorecard;
 use andon::ledger::Ledger;
 use andon::time::{Window, parse_instant};
@@ -27,7 +29,7 @@ fn at(s: &str) -> Timestamp {
 }
 
 fn config() -> Config {
-    Config::parse("[seats.x-1a]\n[seats.x-1b]\n", Path::new("/")).unwrap_or_else(|e| panic!("{e}"))
+    common::config("[seats.x-1a]\n[seats.x-1b]\n", Path::new("/"))
 }
 
 fn fact(t: &str, kind: Kind, goal: Option<&str>) -> Event {
@@ -361,14 +363,13 @@ fn an_unreadable_transcript_is_a_gap_not_zero_hours() {
     .unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(projects.join("bad.jsonl"), b"\x00\x01 not a transcript\n")
         .unwrap_or_else(|e| panic!("{e}"));
-    let config = Config::parse(
+    let config = common::config(
         &format!(
             "[seats.x-1a]\ncwd = [\"/x-1a\"]\n[adapters.sessions]\nclaude = [\"{}/projects/*\"]\n",
             dir.path().display()
         ),
         dir.path(),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    );
     let l = adapters::collect(&config).unwrap_or_else(|e| panic!("{e:#}"));
     let window = Window::parse(DAY, at(NOON)).unwrap_or_else(|e| panic!("{e}"));
     let c = scorecard(&l, &config, window);
@@ -382,29 +383,48 @@ fn an_unreadable_transcript_is_a_gap_not_zero_hours() {
     );
 }
 
-/// The registered gauge a JSON path is an instance of, and whether it is a
-/// single seat's.
-fn spec_of(board: bool, path: &str) -> Option<(&'static Spec, bool)> {
-    let (name, seat) = if board && !path.starts_with("seats.") {
-        (format!("board.{path}"), false)
-    } else if board {
-        let rest = path.strip_prefix("seats.")?.split_once('.')?.1;
-        let name = if rest.starts_with("goals.") && rest.split('.').nth(2) == Some("used") {
-            "row.goals.used".to_owned()
-        } else {
-            format!("row.{rest}")
-        };
-        (name, true)
-    } else if let Some(rest) = path.strip_prefix("seats.") {
-        (format!("card.{}", rest.split_once('.')?.1), true)
-    } else if let Some(g) = path.strip_prefix("unattributed.") {
-        (format!("card.{g}"), true)
-    } else if let Some(g) = path.strip_prefix("total.") {
-        (format!("card.{g}"), false)
-    } else {
-        (path.to_owned(), false)
+/// Finding F (andon-3eu): a transcript's turns all precede its last write,
+/// so one unreadable transcript stands over spans up to then, and a window
+/// after it is still known.
+#[test]
+fn an_unreadable_transcript_stands_only_until_its_last_write() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let projects = dir.path().join("projects/-x-1a");
+    std::fs::create_dir_all(&projects).unwrap_or_else(|e| panic!("{e}"));
+    let bad = projects.join("bad.jsonl");
+    std::fs::write(&bad, b"\x00\x01 not a transcript\n").unwrap_or_else(|e| panic!("{e}"));
+    // last written two days before the window
+    let touched = std::process::Command::new("touch")
+        .args(["-t", "202610110000"])
+        .arg(&bad)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(touched, "touch -t failed");
+    let config = common::config(
+        &format!(
+            "[seats.x-1a]\ncwd = [\"/x-1a\"]\n[adapters.sessions]\nclaude = [\"{}/projects/*\"]\n",
+            dir.path().display()
+        ),
+        dir.path(),
+    );
+    let l = adapters::collect(&config).unwrap_or_else(|e| panic!("{e:#}"));
+    let hours = |window: &str| {
+        let w = Window::parse(window, at(NOON)).unwrap_or_else(|e| panic!("{e}"));
+        scorecard(&l, &config, w).seats["x-1a"].active_hours.clone()
     };
-    registered(&name).map(|s| (s, seat))
+    assert_eq!(hours(DAY), 0.0, "{:?}", hours(DAY).reason());
+    assert!(
+        hours("2026-10-10")
+            .reason()
+            .is_some_and(|w| w.contains("bad.jsonl"))
+    );
+}
+
+/// The gauge a JSON path is an instance of (its declared path is the output
+/// path), and whether it is a single seat's.
+fn spec_of(board: bool, path: &str) -> Option<(&'static Spec, bool)> {
+    let seat = path.starts_with("seats.") || path.starts_with("unattributed.");
+    spec_at(board, path).map(|s| (s, seat))
 }
 
 /// Whether the gauge at `path`, or any gauge holding it, is unknown.
@@ -534,7 +554,7 @@ fn every_gauge_registers_each_kind_its_value_depends_on() {
             assert!(
                 reads,
                 "{path} moves without {kind} facts ({x} -> {y}), but {} does not register {kind}",
-                spec.path
+                spec.field
             );
         }
     }
