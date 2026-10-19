@@ -8,6 +8,7 @@
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
+use crate::event::attr;
 use crate::event::{Kind, Outcome};
 use crate::ledger::Ledger;
 
@@ -48,7 +49,7 @@ impl Coverage {
         let mut c = Self::default();
         for e in ledger.events().iter().filter(|e| e.kind == Kind::Coverage) {
             let covers: Vec<String> = e
-                .attr_strs("covers")
+                .attr_strs(attr::COVERS)
                 .into_iter()
                 .map(str::to_owned)
                 .collect();
@@ -56,7 +57,10 @@ impl Coverage {
                 Some(Outcome::Fail) => c.gaps.push(Gap {
                     covers,
                     seat: scope(e),
-                    reason: e.attr_str("reason").unwrap_or("unreadable").to_owned(),
+                    reason: e
+                        .attr_str(attr::GAP_REASON)
+                        .unwrap_or("unreadable")
+                        .to_owned(),
                 }),
                 _ => c.spans.push(Span {
                     covers,

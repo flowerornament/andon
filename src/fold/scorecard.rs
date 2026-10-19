@@ -16,6 +16,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::config::Config;
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::fold::coverage::Coverage;
 use crate::fold::gauge::{Gauge, Gauger};
@@ -356,7 +357,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
                 // load on it
                 let own = event.seat.as_deref();
                 for seat in event
-                    .attr_strs("to_seats")
+                    .attr_strs(attr::TO_SEATS)
                     .into_iter()
                     .filter(|s| Some(*s) != own)
                 {
@@ -466,7 +467,7 @@ fn joins(
                 if event.seat.is_some() {
                     joins.runs_attributed += 1;
                 }
-                let repo = event.attr_str("repo").unwrap_or("(none)").to_owned();
+                let repo = event.attr_str(attr::REPO).unwrap_or("(none)").to_owned();
                 count_run(runs_by_repo.entry(repo).or_default(), event);
             }
             Kind::Land => {
@@ -531,7 +532,7 @@ fn apply(event: &Event, decisions: &BTreeSet<&str>, cards: &mut [&mut Tally]) {
                 }
                 if !names_goal
                     && event
-                        .attr_str("message_kind")
+                        .attr_str(attr::MESSAGE_KIND)
                         .is_some_and(|k| decisions.contains(k))
                 {
                     card.decisions_without_goal += 1;
@@ -546,7 +547,7 @@ fn apply(event: &Event, decisions: &BTreeSet<&str>, cards: &mut [&mut Tally]) {
 /// Whether a message names a goal: a subject, or goal ids found in its text.
 #[must_use]
 pub fn names_goal(event: &Event) -> bool {
-    event.subject.is_some() || !event.attr_strs("goals").is_empty()
+    event.subject.is_some() || !event.attr_strs(attr::GOALS).is_empty()
 }
 
 fn count_run(counts: &mut RunCounts, event: &Event) {
@@ -555,7 +556,8 @@ fn count_run(counts: &mut RunCounts, event: &Event) {
         Some(Outcome::Pass) => counts.pass += 1,
         Some(Outcome::Fail) => {
             counts.fail += 1;
-            if event.attr_str("reason").is_none() && event.attr_str("failure_tail").is_none() {
+            let kept = [attr::RUN_REASON, attr::FAILURE_TAIL, attr::LOGS];
+            if kept.iter().all(|a| event.attr_str(*a).is_none()) {
                 counts.fail_without_reason += 1;
             }
         }
@@ -585,7 +587,7 @@ fn flow(index: &Index<'_>, window: Window) -> FlowRaw {
         .gate_runs
         .iter()
         .filter(|g| window.contains(g.t))
-        .filter(|g| g.attr_str("recipe") == Some("land") && g.outcome == Some(Outcome::Pass))
+        .filter(|g| g.attr_str(attr::RECIPE) == Some("land") && g.outcome == Some(Outcome::Pass))
         .filter_map(|g| g.t_end.map(|end| minutes(g.t, end)))
         .collect();
     FlowRaw {
@@ -611,7 +613,7 @@ fn hub(
         .collect();
     let mut inbound: BTreeMap<&str, usize> = BTreeMap::new();
     for m in &messages {
-        for seat in m.attr_strs("to_seats") {
+        for seat in m.attr_strs(attr::TO_SEATS) {
             if Some(seat) != m.seat.as_deref() {
                 *inbound.entry(seat).or_default() += 1;
             }
@@ -630,7 +632,7 @@ fn hub(
     };
     let into: Vec<&&Event> = messages
         .iter()
-        .filter(|m| m.attr_strs("to_seats").contains(&seat.as_str()))
+        .filter(|m| m.attr_strs(attr::TO_SEATS).contains(&seat.as_str()))
         .filter(|m| m.seat.as_deref() != Some(seat.as_str()))
         .collect();
     // replies anywhere in the ledger (a reply may fall after the window)
@@ -639,7 +641,7 @@ fn hub(
         if m.seat.as_deref() != Some(seat.as_str()) {
             continue;
         }
-        if let Some(re) = m.attr_str("re") {
+        if let Some(re) = m.attr_str(attr::RE) {
             first_reply.entry(re).or_insert(m.t);
         }
     }
@@ -654,7 +656,7 @@ fn hub(
         .iter()
         .filter(|m| {
             !names_goal(m)
-                && m.attr_str("message_kind")
+                && m.attr_str(attr::MESSAGE_KIND)
                     .is_some_and(|k| decisions.contains(k))
         })
         .count();

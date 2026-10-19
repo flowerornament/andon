@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use crate::adapters::run_tool_in;
 use crate::config::{BdConfig, Config};
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::goal;
 use crate::time::parse_instant;
@@ -110,11 +111,14 @@ pub fn issue_events(
     if let Some(t) = at("created_at")? {
         let mut e = item(t, Kind::Create);
         e.actor = text(issue, "created_by").map(str::to_owned);
-        e.set_attr("title", text(issue, "title").unwrap_or_default());
-        e.set_attr("item_type", text(issue, "issue_type").unwrap_or_default());
+        e.set_attr(attr::TITLE, text(issue, "title").unwrap_or_default());
+        e.set_attr(
+            attr::ITEM_TYPE,
+            text(issue, "issue_type").unwrap_or_default(),
+        );
         // an assignee owns the goal even before starting it (it is not a
         // claim: a claim is a start); the export says who it is now
-        e.set_attr("assignee", text(issue, "assignee").unwrap_or_default());
+        e.set_attr(attr::ASSIGNEE, text(issue, "assignee").unwrap_or_default());
         let description = goal::with_fields(
             text(issue, "description").unwrap_or_default(),
             issue,
@@ -122,10 +126,10 @@ pub fn issue_events(
         );
         let sections = goal::sections(&description);
         if let Some(budget) = goal::section(&sections, &config.goal.budget) {
-            e.set_attr("budget", budget.to_owned());
+            e.set_attr(attr::BUDGET, budget.to_owned());
         }
         if let Some(pool) = goal::section(&sections, "pool") {
-            e.set_attr("pool", pool.to_owned());
+            e.set_attr(attr::POOL, pool.to_owned());
         }
         out.push(e);
     }
@@ -141,10 +145,10 @@ pub fn issue_events(
     {
         let mut e = item(t, Kind::Claim);
         e.actor = Some(assignee.to_owned());
-        e.set_attr("assignee", assignee.to_owned());
+        e.set_attr(attr::ASSIGNEE, assignee.to_owned());
         if started.is_none() {
             // no start recorded: the last update stands in, and moves
-            e.set_attr("claim_time", "updated_at");
+            e.set_attr(attr::CLAIM_TIME, "updated_at");
         }
         out.push(e);
     }
@@ -153,7 +157,10 @@ pub fn issue_events(
         && let Some(t) = at("closed_at")?.or(at("updated_at")?)
     {
         let mut e = item(t, Kind::Close);
-        e.set_attr("reason", text(issue, "close_reason").unwrap_or_default());
+        e.set_attr(
+            attr::CLOSE_REASON,
+            text(issue, "close_reason").unwrap_or_default(),
+        );
         out.push(e);
     }
 
@@ -216,7 +223,7 @@ fn comment_event(
         // the comment's author gave the verdict; it is on the reviewed
         // change's seat, which its commit and change ids resolve to
         let reviewer = e.actor.take().unwrap_or_default();
-        e.set_attr("reviewer", reviewer);
+        e.set_attr(attr::REVIEWER, reviewer);
         e.ids.verdict = id;
         let at = |path: &Option<String>| path.as_deref().and_then(|p| field(&v, p));
         e.ids.commit = at(&format.commit)
@@ -236,7 +243,7 @@ fn comment_event(
             _ => Vec::new(),
         };
         e.ids.change = changes.first().cloned();
-        e.set_attr("changes", changes);
+        e.set_attr(attr::CHANGES, changes);
         let said = field(&v, &format.outcome)
             .and_then(Value::as_str)
             .map(str::to_lowercase);
@@ -254,7 +261,7 @@ fn comment_event(
         return Ok(Some(e));
     }
     e.ids.verdict = None;
-    e.set_attr("comment", id.unwrap_or_default());
+    e.set_attr(attr::COMMENT, id.unwrap_or_default());
     Ok(Some(e))
 }
 
@@ -324,7 +331,10 @@ mod tests {
                 "close"
             ]
         );
-        assert_eq!(events[0].attr_str("budget"), Some("about 8 agent-hours"));
+        assert_eq!(
+            events[0].attr_str(attr::BUDGET),
+            Some("about 8 agent-hours")
+        );
         assert_eq!(events[1].actor.as_deref(), Some("andon-1b"));
         let verdict = &events[3];
         assert_eq!(verdict.outcome, Some(Outcome::Return));
@@ -332,7 +342,7 @@ mod tests {
         assert_eq!(verdict.ids.change.as_deref(), Some("wnon"));
         assert_eq!(verdict.ids.commit.as_deref(), Some("abc"));
         assert_eq!(verdict.actor, None);
-        assert_eq!(verdict.attr_str("reviewer"), Some("andon-1a"));
-        assert_eq!(events[6].attr_str("reason"), Some("done"));
+        assert_eq!(verdict.attr_str(attr::REVIEWER), Some("andon-1a"));
+        assert_eq!(events[6].attr_str(attr::CLOSE_REASON), Some("done"));
     }
 }

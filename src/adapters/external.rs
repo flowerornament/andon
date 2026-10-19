@@ -28,6 +28,7 @@ use anyhow::{Context, Result, bail};
 use crate::adapters::{glob_all, run_tool_in};
 use crate::config::{Config, ExternalConfig};
 use crate::event::Event;
+use crate::event::attr;
 
 /// The version of the contract this andon reads.
 pub const CONTRACT: u32 = 1;
@@ -89,9 +90,18 @@ pub fn parse(text: &str, name: &str, origin: &str) -> Result<Vec<Event>> {
                 i + 1
             )
         })?;
+        event.upgrade();
+        if let Some(a) = event.misshapen() {
+            bail!(
+                "external adapter {name}: line {} of {origin} has attrs.{} that is not {}; fix the adapter",
+                i + 1,
+                a.key,
+                a.shape.as_str()
+            );
+        }
         // seat identity is andon's join, never an adapter's assertion
         event.seat = None;
-        event.set_attr("adapter", name.to_owned());
+        event.set_attr(attr::ADAPTER, name.to_owned());
         event.source = format!("adapter {name}: {}", event.source);
         events.push(event);
     }
@@ -115,7 +125,7 @@ mod tests {
         assert_eq!(e.kind, Kind::Other("other:boundary_fix".into()));
         assert_eq!(e.seat, None);
         assert_eq!(e.actor.as_deref(), Some("x-1a"));
-        assert_eq!(e.attr_str("adapter"), Some("x-review"));
+        assert_eq!(e.attr_str(attr::ADAPTER), Some("x-review"));
         assert_eq!(e.source, "adapter x-review: review census");
     }
 
@@ -127,6 +137,21 @@ mod tests {
         assert_eq!(
             err.as_deref(),
             Some("external adapter x-review: line 1 of x-adapter is not an andon event")
+        );
+    }
+
+    #[test]
+    fn a_declared_key_of_the_wrong_shape_is_refused() {
+        let line =
+            r#"{"t":"2026-10-13T10:00:00Z","kind":"run","source":"s","attrs":{"recipe":["land"]}}"#;
+        let err = parse(line, "x-review", "x-adapter")
+            .err()
+            .map(|e| e.to_string());
+        assert_eq!(
+            err.as_deref(),
+            Some(
+                "external adapter x-review: line 1 of x-adapter has attrs.recipe that is not text; fix the adapter"
+            )
         );
     }
 }

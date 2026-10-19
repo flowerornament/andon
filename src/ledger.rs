@@ -109,8 +109,9 @@ impl Ledger {
             if line.trim().is_empty() {
                 continue;
             }
-            let event: Event = serde_json::from_str(&line)
+            let mut event: Event = serde_json::from_str(&line)
                 .with_context(|| format!("ledger line {} is not an event", index + 1))?;
+            event.upgrade();
             events.push(event);
         }
         Ok(Self::new(events))
@@ -132,6 +133,7 @@ impl Ledger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::attr;
     use crate::time::parse_instant;
 
     fn at(s: &str, kind: Kind) -> Event {
@@ -157,7 +159,7 @@ mod tests {
     fn written_ledger_reads_back_identically() {
         let mut land = at("2026-10-11T01:00:00Z", Kind::Land);
         land.ids.commit = Some("abc".to_owned());
-        land.set_attr("recipe", "land");
+        land.set_attr(attr::RECIPE, "land");
         let ledger = Ledger::new(vec![land, at("2026-10-11T00:00:00Z", Kind::Run)]);
         let mut bytes = Vec::new();
         ledger.write(&mut bytes).unwrap_or_else(|e| panic!("{e}"));

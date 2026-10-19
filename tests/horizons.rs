@@ -4,11 +4,17 @@
 //! knockouts (`FERRY_GAP`, `JJ_EARLY`, `HAIL_EARLY`, `SESS_EARLY`) each turn one
 //! of these red.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::path::Path;
 use std::process::Command;
 
 use andon::adapters;
 use andon::config::Config;
+use andon::event::attr;
 use andon::event::{Event, Kind, Outcome};
 use andon::ledger::Ledger;
 use andon::time::parse_instant;
@@ -35,7 +41,7 @@ fn starts(l: &Ledger, kind: &str) -> Vec<Timestamp> {
     l.events()
         .iter()
         .filter(|e| e.kind == Kind::Coverage && e.outcome == Some(Outcome::Pass))
-        .filter(|e| e.attr_strs("covers").contains(&kind))
+        .filter(|e| e.attr_strs(attr::COVERS).contains(&kind))
         .map(|e| e.t)
         .collect()
 }
@@ -44,7 +50,7 @@ fn gaps<'a>(l: &'a Ledger, kind: &str) -> Vec<&'a Event> {
     l.events()
         .iter()
         .filter(|e| e.kind == Kind::Coverage && e.outcome == Some(Outcome::Fail))
-        .filter(|e| e.attr_strs("covers").contains(&kind))
+        .filter(|e| e.attr_strs(attr::COVERS).contains(&kind))
         .collect()
 }
 
@@ -99,7 +105,7 @@ fn hail_names_what_it_could_not_read() {
     unlock(&cur);
     let why: Vec<&str> = gaps(&l, "message")
         .iter()
-        .filter_map(|g| g.attr_str("reason"))
+        .filter_map(|g| g.attr_str(attr::GAP_REASON))
         .collect();
     assert!(
         why.iter()
@@ -160,7 +166,10 @@ fn an_unlistable_sessions_directory_is_a_gap() {
     unlock(&sub);
     let g = gaps(&l, "session_active");
     assert_eq!(g.len(), 1, "{g:?}");
-    assert!(g[0].attr_str("reason").is_some_and(|w| w.contains("sub")));
+    assert!(
+        g[0].attr_str(attr::GAP_REASON)
+            .is_some_and(|w| w.contains("sub"))
+    );
 }
 
 fn receipt(started_ms: i64) -> String {
@@ -214,7 +223,7 @@ fn ferry_gaps_name_each_unreadable_receipt_and_directory() {
     unlock(&b);
     let why: Vec<&str> = gaps(&l, "run")
         .iter()
-        .filter_map(|g| g.attr_str("reason"))
+        .filter_map(|g| g.attr_str(attr::GAP_REASON))
         .collect();
     assert!(why.iter().any(|w| w.contains("garbage.json")), "{why:?}");
     assert!(

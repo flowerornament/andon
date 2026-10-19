@@ -23,6 +23,7 @@ use serde::Deserialize;
 
 use crate::adapters::run_tool;
 use crate::config::{Config, JjConfig, Trailers};
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::time::parse_instant;
 
@@ -127,7 +128,7 @@ pub fn describe(
     jc: &JjConfig,
     rev: &str,
     cwd: &Path,
-) -> Result<crate::check::Commit> {
+) -> Result<crate::commit::Commit> {
     // a revision the caller names (`@` above all) is the caller's: resolve it
     // in the caller's workspace when that is a workspace of the configured
     // repository, never in the configured checkout's own working copy
@@ -145,7 +146,7 @@ pub fn describe(
         anyhow::bail!("{rev} names {} commits; name exactly one", commits.len());
     };
     let parsed = Parsed::new(&commit.description, &jc.trailers, &config.goal_regex()?);
-    Ok(crate::check::Commit {
+    Ok(crate::commit::Commit {
         id: commit.commit_id.clone(),
         title: parsed.title,
         message: commit.description.clone(),
@@ -286,7 +287,7 @@ fn log(repo: &Repo<'_>, revset: &str) -> Result<Vec<JjCommit>> {
 fn op_log(repo: &Repo<'_>, since: Option<Timestamp>) -> Result<Vec<JjOp>> {
     use std::io::BufRead;
     let dir = repo.dir.to_string_lossy();
-    let mut child = std::process::Command::new("jj")
+    let mut child = crate::adapters::command("jj", std::path::Path::new("."))
         .args([
             "--ignore-working-copy",
             "--at-op",
@@ -296,7 +297,6 @@ fn op_log(repo: &Repo<'_>, since: Option<Timestamp>) -> Result<Vec<JjOp>> {
             &dir,
         ])
         .args(["op", "log", "--no-graph", "-T", "json(self) ++ \"\\n\""])
-        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -393,7 +393,7 @@ pub fn events(
                 .workspace_name
                 .clone()
                 .or_else(|| quoted(&op.description).map(str::to_owned));
-            e.set_attr("description", op.description.clone());
+            e.set_attr(attr::DESCRIPTION, op.description.clone());
             out.push(e);
         }
     }
@@ -430,9 +430,9 @@ pub fn events(
         if land.actor.is_none() {
             land.actor = workspace.map(str::to_owned);
         }
-        land.set_attr("workspace", workspace.unwrap_or_default());
+        land.set_attr(attr::WORKSPACE, workspace.unwrap_or_default());
         land.set_attr(
-            "land_time",
+            attr::LAND_TIME,
             if batch.is_some() { "op" } else { "committer" },
         );
         out.push(land);
@@ -454,7 +454,7 @@ fn start(commit: &JjCommit, parsed: &Parsed, source: &str, landed: bool) -> Resu
     );
     fill(&mut e, commit, parsed);
     if landed {
-        e.set_attr("landed", true);
+        e.set_attr(attr::LANDED, true);
     }
     Ok(e)
 }
@@ -467,10 +467,11 @@ fn fill(e: &mut Event, commit: &JjCommit, parsed: &Parsed) {
     e.ids.cites.clone_from(&parsed.cites);
     e.subject.clone_from(&parsed.goal);
     e.actor = parsed.seat.clone().or_else(|| parsed.workspace.clone());
-    e.set_attr("title", parsed.title.clone());
-    for (key, values) in &parsed.kept {
-        e.set_attr(key, values.clone());
-    }
+    e.set_attr(attr::TITLE, parsed.title.clone());
+    e.set_attr(
+        attr::TRAILERS,
+        serde_json::to_value(&parsed.kept).unwrap_or_default(),
+    );
 }
 
 /// The first `'quoted'` name in a description: `add workspace 'andon-1c'`.
@@ -663,7 +664,7 @@ mod tests {
         assert_eq!(lands[1].actor.as_deref(), Some("andon-1b"));
         // c1 was committed before the previous trunk move: committer time
         assert_eq!(lands[2].t, t("2026-10-12T09:05:00Z"));
-        assert_eq!(lands[2].attr_str("land_time"), Some("committer"));
+        assert_eq!(lands[2].attr_str(attr::LAND_TIME), Some("committer"));
         let starts: Vec<&Event> = events.iter().filter(|e| e.kind == Kind::Commit).collect();
         assert_eq!(starts[0].t, t("2026-10-13T10:00:00Z"));
         assert_eq!(starts[0].subject.as_deref(), Some("andon-xa4"));

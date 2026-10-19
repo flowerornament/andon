@@ -1,5 +1,10 @@
 //! The command line's contract: exit codes and one-line stdout.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::path::Path;
 use std::process::{Command, Output};
 

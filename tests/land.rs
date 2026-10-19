@@ -6,6 +6,11 @@
 //! Needs jj and the script; where either is missing (the Nix build sandbox)
 //! it says so on stderr and passes, because the gate that matters runs it.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 

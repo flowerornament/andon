@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -169,7 +170,7 @@ pub fn problems(description: &str, config: &Config) -> Vec<String> {
         }
     }
     if let Some(budget) = section(&found, &config.goal.budget)
-        && crate::fold::board::parse_budget(budget).is_none()
+        && parse_budget(budget).is_none()
     {
         problems.push(format!(
             "state the {} as a number of agent-hours, hours, days or runs",
@@ -303,6 +304,33 @@ fn cannot_fail(done: &str, checkable: &[String]) -> bool {
 fn first_words(text: &str) -> String {
     let words: Vec<&str> = text.split_whitespace().take(6).collect();
     words.join(" ")
+}
+
+static BUDGET: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(\d+(?:\.\d+)?)\s*(agent[- ]hours?|agent[- ]h\b|hours?|h\b|runs?|wall[- ]clock hours?|days?)",
+    )
+    .ok()
+});
+
+/// The first amount a budget states: `about 4 agent-hours` → (4, agent-hours).
+#[must_use]
+pub fn parse_budget(text: &str) -> Option<(f64, String)> {
+    let caps = BUDGET.as_ref()?.captures(text)?;
+    let n: f64 = caps.get(1)?.as_str().parse().ok()?;
+    let word = caps.get(2)?.as_str().to_lowercase();
+    let (n, unit) = if word.starts_with("agent") {
+        (n, "agent-hours")
+    } else if word.starts_with("run") {
+        (n, "runs")
+    } else if word.starts_with("day") {
+        (n * 24.0, "wall-clock")
+    } else if word.starts_with("wall") {
+        (n, "wall-clock")
+    } else {
+        (n, "agent-hours")
+    };
+    Some((n, unit.to_owned()))
 }
 
 #[cfg(test)]
@@ -478,5 +506,23 @@ mod tests {
             problems(&format!("{GOAL}\n## Pool\n\ncompiler\n"), &config),
             [] as [std::string::String; 0]
         );
+    }
+
+    #[test]
+    fn budgets_state_their_amount() {
+        assert_eq!(
+            parse_budget("One agent session (about 4 agent-hours)"),
+            Some((4.0, "agent-hours".to_owned()))
+        );
+        assert_eq!(
+            parse_budget("Two agent sessions (about 8 agent-hours)."),
+            Some((8.0, "agent-hours".to_owned()))
+        );
+        assert_eq!(parse_budget("30 runs"), Some((30.0, "runs".to_owned())));
+        assert_eq!(
+            parse_budget("2 days"),
+            Some((48.0, "wall-clock".to_owned()))
+        );
+        assert_eq!(parse_budget("small"), None);
     }
 }

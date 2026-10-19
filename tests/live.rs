@@ -25,6 +25,11 @@
 //! land gate: it is ignored by `cargo test` and run on purpose with
 //! `just live` (at acceptance time).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::path::{Path, PathBuf};
 
 use andon::adapters;

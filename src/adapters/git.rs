@@ -21,6 +21,7 @@ use regex::Regex;
 
 use crate::adapters::run_tool;
 use crate::config::{Config, GitConfig};
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::time::parse_instant;
 
@@ -114,7 +115,7 @@ pub fn collect(config: &Config, gc: &GitConfig) -> Result<Vec<Event>> {
 ///
 /// # Errors
 /// When git cannot resolve the revision.
-pub fn describe(config: &Config, gc: &GitConfig, rev: &str) -> Result<crate::check::Commit> {
+pub fn describe(config: &Config, gc: &GitConfig, rev: &str) -> Result<crate::commit::Commit> {
     let dir = config.path(&gc.repo);
     top_level(&dir)?;
     let dir = dir.to_string_lossy();
@@ -128,7 +129,7 @@ pub fn describe(config: &Config, gc: &GitConfig, rev: &str) -> Result<crate::che
         .next()
         .ok_or_else(|| anyhow::anyhow!("git names no commit {rev}"))?;
     let parsed = super::jj::Parsed::new(&commit.message, &gc.trailers, &config.goal_regex()?);
-    Ok(crate::check::Commit {
+    Ok(crate::commit::Commit {
         id: commit.id,
         title: parsed.title,
         message: commit.message,
@@ -202,9 +203,9 @@ pub fn events(
             e.ids.change.clone_from(&change);
             e.ids.session.clone_from(&trailers.session);
             e.ids.cites.clone_from(&trailers.cites);
-            e.set_attr("title", subject.to_owned());
-            e.set_attr("author", commit.author.clone());
-            e.set_attr("branch", branch.clone().unwrap_or_default());
+            e.set_attr(attr::TITLE, subject.to_owned());
+            e.set_attr(attr::AUTHOR, commit.author.clone());
+            e.set_attr(attr::BRANCH, branch.clone().unwrap_or_default());
         };
         let mut land = Event::new(
             parse_instant(&commit.commit_time)?,
@@ -217,7 +218,7 @@ pub fn events(
         let start = branch_start(commit, &on_trunk, &by_id)?;
         let mut begun = Event::new(start, Kind::Commit, format!("{source} log (author time)"));
         fill(&mut begun);
-        begun.set_attr("landed", true);
+        begun.set_attr(attr::LANDED, true);
         out.push(begun);
     }
     Ok(out)

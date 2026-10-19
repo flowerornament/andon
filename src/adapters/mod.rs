@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 
 use crate::config::Config;
 use crate::event::Event;
+use crate::event::attr;
 use crate::ledger::Ledger;
 use crate::seat::Resolver;
 
@@ -132,11 +133,10 @@ fn run_adapters(
             .with_context(|| format!("adapter {name} (see its [adapters] table in andon.toml)"))?;
         // every coverage fact names the adapter that read it; an external
         // adapter's events already carry its own name
-        for e in got
-            .iter_mut()
-            .filter(|e| e.kind == crate::event::Kind::Coverage && e.attr_str("adapter").is_none())
-        {
-            e.set_attr("adapter", name.clone());
+        for e in got.iter_mut().filter(|e| {
+            e.kind == crate::event::Kind::Coverage && e.attr_str(attr::ADAPTER).is_none()
+        }) {
+            e.set_attr(attr::ADAPTER, name.clone());
         }
         events.extend(got);
     }
@@ -170,14 +170,14 @@ fn known_goals(events: &mut [Event]) {
             continue;
         }
         let goals: Vec<String> = e
-            .attr_strs("goals")
+            .attr_strs(attr::GOALS)
             .into_iter()
             .filter(|g| known.contains(*g))
             .map(str::to_owned)
             .collect();
-        if e.attrs.contains_key("goals") {
-            e.attrs.remove("goals");
-            e.set_attr("goals", goals.clone());
+        if e.has_attr(attr::GOALS) {
+            e.remove_attr(attr::GOALS);
+            e.set_attr(attr::GOALS, goals.clone());
         }
         if e.subject.as_ref().is_some_and(|s| !known.contains(s)) {
             e.subject = goals.first().cloned();
@@ -200,11 +200,33 @@ pub fn run_tool(tool: &str, args: &[&str], fix: &str) -> Result<String> {
 /// # Errors
 /// When the tool is not on PATH or exits non-zero.
 pub fn run_tool_in(dir: &std::path::Path, tool: &str, args: &[&str], fix: &str) -> Result<String> {
+    let mut command = command(tool, dir);
+    command.args(args);
+    let output = command
+        .output()
+        .map_err(|e| anyhow::anyhow!("cannot run {tool} ({e}); {fix}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("no message");
+        let first = first.trim_start_matches("Error: ");
+        anyhow::bail!("{tool} failed: {first}");
+    }
+    String::from_utf8(output.stdout).with_context(|| format!("{tool} printed non-UTF-8"))
+}
+
+/// The one way andon starts a process: a read-only tool, in `dir`, with no
+/// stdin. Every adapter spawns through this (clippy.toml holds the line).
+#[must_use]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the subprocess wrapper: the one place a process is built"
+)]
+pub fn command(tool: &str, dir: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new(tool);
-    command
-        .args(args)
-        .current_dir(dir)
-        .stdin(std::process::Stdio::null());
+    command.current_dir(dir).stdin(std::process::Stdio::null());
     if tool == "git" {
         // a read answers for the path it names: an inherited GIT_DIR (or
         // work tree, index, object store) must not redirect it, and a read
@@ -222,19 +244,7 @@ pub fn run_tool_in(dir: &std::path::Path, tool: &str, args: &[&str], fix: &str) 
         }
         command.env("GIT_OPTIONAL_LOCKS", "0");
     }
-    let output = command
-        .output()
-        .map_err(|e| anyhow::anyhow!("cannot run {tool} ({e}); {fix}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let first = stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("no message");
-        let first = first.trim_start_matches("Error: ");
-        anyhow::bail!("{tool} failed: {first}");
-    }
-    String::from_utf8(output.stdout).with_context(|| format!("{tool} printed non-UTF-8"))
+    command
 }
 
 /// Every directory an adapter lists goes through one of these, so a
@@ -364,7 +374,10 @@ mod tests {
         create.subject = Some("x-pfgt".into());
         let mut message = Event::new(t, Kind::Message, "hail");
         message.subject = Some("x-review".into());
-        message.set_attr("goals", vec!["x-review".to_owned(), "x-pfgt".to_owned()]);
+        message.set_attr(
+            attr::GOALS,
+            vec!["x-review".to_owned(), "x-pfgt".to_owned()],
+        );
         let ledger = resolve(&Config::default(), vec![create, message]);
         let m = ledger
             .events()
@@ -372,6 +385,6 @@ mod tests {
             .find(|e| e.kind == Kind::Message)
             .unwrap_or_else(|| panic!("the message"));
         assert_eq!(m.subject.as_deref(), Some("x-pfgt"));
-        assert_eq!(m.attr_strs("goals"), vec!["x-pfgt"]);
+        assert_eq!(m.attr_strs(attr::GOALS), vec!["x-pfgt"]);
     }
 }

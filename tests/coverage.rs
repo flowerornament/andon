@@ -3,11 +3,17 @@
 //! that read it unknown, with a reason, and leaves the others known. A gauge
 //! is never 0 where the ledger could not look.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use andon::adapters;
 use andon::config::Config;
+use andon::event::attr;
 use andon::event::{ALL_HISTORY, Event, Kind, Outcome, coverage, gap};
 use andon::fold::board::board;
 use andon::fold::gauge::{Spec, registered};
@@ -81,19 +87,19 @@ fn day(fault: Option<(&str, Fault)>, drop: Option<&str>) -> Ledger {
     start.ids.commit = Some("c1".into());
     let mut run = fact("2026-10-13T11:30:00Z", Kind::Run, None);
     run.outcome = Some(Outcome::Fail);
-    run.set_attr("repo", "x");
+    run.set_attr(attr::REPO, "x");
     let mut gate = fact("2026-10-13T11:50:00Z", Kind::GateRun, None);
     gate.t_end = Some(at("2026-10-13T11:55:00Z"));
     gate.outcome = Some(Outcome::Pass);
-    gate.set_attr("recipe", "land");
+    gate.set_attr(attr::RECIPE, "land");
     let mut verdict = fact("2026-10-13T11:40:00Z", Kind::Verdict, Some("x-goal"));
     verdict.outcome = Some(Outcome::Go);
     verdict.ids.verdict = Some("v1".into());
     let mut message = fact("2026-10-13T10:00:00Z", Kind::Message, Some("x-goal"));
-    message.set_attr("message_kind", "ask");
-    message.set_attr("to", vec!["x-1b".to_owned()]);
+    message.set_attr(attr::MESSAGE_KIND, "ask");
+    message.set_attr(attr::TO, vec!["x-1b".to_owned()]);
     let mut create = fact("2026-10-13T08:00:00Z", Kind::Create, Some("x-goal"));
-    create.set_attr("budget", "4 agent-hours");
+    create.set_attr(attr::BUDGET, "4 agent-hours");
     let claim = fact("2026-10-13T09:00:00Z", Kind::Claim, Some("x-goal"));
     let comment = fact(
         "2026-10-13T09:30:00Z",

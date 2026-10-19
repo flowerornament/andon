@@ -130,3 +130,31 @@ A source that holds only current state (a tracker's export) emits
 for the state at that instant, never for history. A kind's state at an
 instant is known if the kind is covered over all history, or if a
 `state:<kind>` span holds that instant (`2026-10-14-coverage.md`, round four).
+
+## Amendment: declared attributes (2026-10-19, andon-h03)
+
+`attrs` is no longer open. Every key is declared once, with a shape (text,
+texts, int, bool, map) and one meaning, in `src/event.rs` (`attr::ALL`);
+that list is the contract, and §2's list of names is superseded by it. In
+the core, adapters write and folds read only through a declared key, so an
+undeclared one does not compile. An external adapter may still emit any
+key: an undeclared one is carried into the ledger and never read, and a
+declared key of the wrong shape is refused, naming the adapter and the line.
+
+`reason` carried four meanings and is split by them: `gap_reason` (why a
+source could not be read), `close_reason` (why a tracker item closed),
+`run_reason` (a runner's own reason for an ending) and `logs` (where a
+failed run's logs are kept). A kept ledger or a contract-1 adapter that
+writes `reason` is read as before: the key is renamed by the kind of event
+that carries it (coverage, close, a run on `github-actions`, any other run).
+Trailers a project keeps on landings move under one key, `trailers`, so a
+trailer's name can no longer collide with a declared key. Contract stays 1.
+
+The layers are held by `tests/layers.rs`: the event contract, config, the
+goal schema and the ledger at the bottom, then adapters, folds, checks and
+surfaces, the hook, the command line. A commit as the checks read it
+(`commit::Commit`) and the budget's parse (`goal::parse_budget`) sit below
+both their users. `clippy.toml` forbids reading the clock, writing a file
+and spawning a process outside the sites that say why they are the one:
+the command line's clock, the subprocess wrapper, and `Config::capture`'s
+fallback for a library caller that set no capture instant.

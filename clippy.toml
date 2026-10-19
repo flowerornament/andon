@@ -1,0 +1,7 @@
+# The invariants a reviewer used to hold by eye (AGENTS.md), held by the
+# compiler. Each allowed site carries an #[allow] that says why it is the one.
+disallowed-methods = [
+    { path = "jiff::Timestamp::now", reason = "time enters at capture and render only: cli.rs reads the clock once and passes it down" },
+    { path = "std::fs::write", reason = "andon is read-only: its only effects are stdout and an exit code" },
+    { path = "std::process::Command::new", reason = "spawn through adapters::command, which closes stdin and keeps an inherited GIT_* from redirecting a read" },
+]

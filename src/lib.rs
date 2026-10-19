@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod check;
 pub mod cli;
+pub mod commit;
 pub mod config;
 pub mod event;
 pub mod fold;

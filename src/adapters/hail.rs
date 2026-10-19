@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::adapters::Reads;
 use crate::config::{Config, HailConfig, wildcard};
+use crate::event::attr;
 use crate::event::{Event, Kind};
 use crate::time::parse_instant;
 
@@ -237,8 +238,11 @@ fn message_event(id: &str, m: &Message, goal: &Regex) -> Result<Option<Event>> {
     // the subject is the goal named first, the headline's if it names one
     e.subject = crate::goal::find(goal, &text);
     e.ids.goal.clone_from(&e.subject);
-    e.set_attr("goals", Value::from(goals));
-    e.set_attr("message_kind", h.get("kind").cloned().unwrap_or_default());
+    e.set_attr(attr::GOALS, Value::from(goals));
+    e.set_attr(
+        attr::MESSAGE_KIND,
+        h.get("kind").cloned().unwrap_or_default(),
+    );
     let mut to: Vec<String> = m.recipients.clone();
     if let Some(header) = h.get("to") {
         for r in header
@@ -252,9 +256,9 @@ fn message_event(id: &str, m: &Message, goal: &Regex) -> Result<Option<Event>> {
         }
     }
     to.sort();
-    e.set_attr("to", Value::from(to));
-    e.set_attr("re", h.get("re").cloned().unwrap_or_default());
-    e.set_attr("headline", headline);
+    e.set_attr(attr::TO, Value::from(to));
+    e.set_attr(attr::RE, h.get("re").cloned().unwrap_or_default());
+    e.set_attr(attr::HEADLINE, headline);
     Ok(Some(e))
 }
 
@@ -296,6 +300,10 @@ pub fn from_dir(state: &Path, labels: &[&str], goal: &str) -> Result<Vec<Event>>
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures write the messages they read"
+)]
 mod tests {
     use super::*;
 
@@ -323,9 +331,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         let e = &events[0];
         assert_eq!(e.actor.as_deref(), Some("andon-1b"));
-        assert_eq!(e.attr_strs("to"), vec!["andon"]);
-        assert_eq!(e.attr_strs("goals"), vec!["andon-76c", "andon-xa4"]);
-        assert_eq!(e.attr_str("message_kind"), Some("ask"));
+        assert_eq!(e.attr_strs(attr::TO), vec!["andon"]);
+        assert_eq!(e.attr_strs(attr::GOALS), vec!["andon-76c", "andon-xa4"]);
+        assert_eq!(e.attr_str(attr::MESSAGE_KIND), Some("ask"));
     }
 
     #[test]

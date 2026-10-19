@@ -569,6 +569,10 @@ impl Config {
     /// The capture instant; the clock, for a caller that set none (a test,
     /// a library use).
     #[must_use]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a library caller that set no capture instant reads the clock here, once; the CLI always sets one"
+    )]
     pub fn capture(&self) -> jiff::Timestamp {
         self.capture.unwrap_or_else(jiff::Timestamp::now)
     }

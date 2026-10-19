@@ -440,7 +440,7 @@ pub fn board(board: &Board) -> String {
             "\n{} is claimed by '{}', which is not a seat; {}",
             u.goal,
             u.owner,
-            crate::check::identity_hint_any(&u.goal)
+            crate::seat::identity_hint_any(&u.goal)
         );
     }
     let entries = row_reasons(board);

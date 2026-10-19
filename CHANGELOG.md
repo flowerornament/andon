@@ -4,6 +4,14 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- Event attributes are a declared contract (`src/event.rs`, `attr::ALL`):
+  one name, shape and meaning per key. An external adapter's declared key
+  of the wrong shape is refused; an undeclared key is carried, never read.
+- `reason` is split into `gap_reason`, `close_reason`, `run_reason` and
+  `logs`; a kept ledger or an adapter that writes `reason` is still read.
+  Kept trailers (`adapters.jj.trailers.keep`) move under `attrs.trailers`.
+  Board, scorecard and asof output is unchanged.
+
 ## v0.2.0 - 2026-10-14
 
 The first adopter's fixes, and a rename that breaks 0.1.0 configs and JSON.

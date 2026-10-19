@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::adapters::Reads;
 use crate::config::{Config, FerryConfig};
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::time::from_millis;
 
@@ -88,7 +89,7 @@ pub fn collect(config: &Config, fc: &FerryConfig) -> Result<Vec<Event>> {
                     // the receipt keeps its size, not its text
                     let id = e.ids.receipt.clone().unwrap_or_default();
                     if let Some(log) = output_log(&dir, &id) {
-                        e.set_attr("failure_tail", log.display().to_string());
+                        e.set_attr(attr::FAILURE_TAIL, log.display().to_string());
                     }
                     events.push(e);
                 }
@@ -182,15 +183,19 @@ pub fn receipt_event(
     let ferry_outcome = receipt["outcome"].as_str().unwrap_or_default();
     let code = receipt["exit_code"].as_i64();
     e.outcome = Some(outcome(ferry_outcome, code));
-    e.set_attr("ferry_outcome", ferry_outcome.to_owned());
+    e.set_attr(attr::FERRY_OUTCOME, ferry_outcome.to_owned());
     if let Some(bytes) = receipt["output"]["bytes"].as_i64() {
-        e.set_attr("output_bytes", bytes);
+        e.set_attr(attr::OUTPUT_BYTES, bytes);
     }
-    for key in ["recipe", "machine", "reason"] {
-        e.set_attr(key, receipt[key].as_str().unwrap_or_default().to_owned());
+    for (attr, key) in [
+        (attr::RECIPE, "recipe"),
+        (attr::MACHINE, "machine"),
+        (attr::RUN_REASON, "reason"),
+    ] {
+        e.set_attr(attr, receipt[key].as_str().unwrap_or_default().to_owned());
     }
     if let Some(code) = code {
-        e.set_attr("exit_code", code);
+        e.set_attr(attr::EXIT_CODE, code);
     }
     Ok(Some(e))
 }
@@ -217,6 +222,10 @@ pub fn outcome(ferry: &str, code: Option<i64>) -> Outcome {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures write the receipts and logs they read"
+)]
 mod tests {
     use super::*;
 
@@ -233,8 +242,8 @@ mod tests {
         assert_eq!(e.kind, Kind::Run);
         assert_eq!(e.outcome, Some(Outcome::Fail));
         assert_eq!(e.actor.as_deref(), Some("andon-1b"));
-        assert_eq!(e.attr_str("reason"), None);
-        assert_eq!(e.attr_str("recipe"), Some("smoke"));
+        assert_eq!(e.attr_str(attr::RUN_REASON), None);
+        assert_eq!(e.attr_str(attr::RECIPE), Some("smoke"));
         assert!(e.t_end.is_some());
     }
 

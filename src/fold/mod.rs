@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use jiff::Timestamp;
 
+use crate::event::attr;
 use crate::event::{Event, Kind};
 use crate::ledger::Ledger;
 
@@ -51,7 +52,7 @@ impl<'a> Index<'a> {
                     // a verdict joins its landing by change only when its
                     // source says so (a pull request's review); elsewhere the
                     // landing's trailers cite it
-                    if event.attr_str("join") == Some("change")
+                    if event.attr_str(attr::JOIN) == Some("change")
                         && let Some(change) = event.ids.change.as_deref()
                     {
                         index
@@ -121,15 +122,15 @@ impl<'a> Index<'a> {
                     item.created = Some(event.t);
                     if item.owner.is_none() {
                         item.owner = event
-                            .attr_str("assignee_seat")
-                            .or_else(|| event.attr_str("assignee"))
+                            .attr_str(attr::ASSIGNEE_SEAT)
+                            .or_else(|| event.attr_str(attr::ASSIGNEE))
                             .map(str::to_owned);
                     }
                     if item.title.is_none() {
-                        item.title = event.attr_str("title").map(str::to_owned);
+                        item.title = event.attr_str(attr::TITLE).map(str::to_owned);
                     }
-                    item.budget = event.attr_str("budget").map(str::to_owned);
-                    item.item_type = event.attr_str("item_type").map(str::to_owned);
+                    item.budget = event.attr_str(attr::BUDGET).map(str::to_owned);
+                    item.item_type = event.attr_str(attr::ITEM_TYPE).map(str::to_owned);
                 }
                 Kind::Claim => {
                     item.owner = event.seat.clone().or_else(|| event.actor.clone());

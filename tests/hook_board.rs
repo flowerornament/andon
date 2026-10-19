@@ -3,6 +3,11 @@
 //! Codex rollout that starts in another directory and then works in the
 //! seat's, another seat's session, and a claim from an external adapter.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::path::Path;
 
 use andon::adapters;

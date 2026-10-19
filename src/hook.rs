@@ -20,6 +20,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::config::Config;
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::fold::board::{self, Row};
 use crate::fold::coverage::Coverage;
@@ -250,7 +251,7 @@ fn changes(
             Kind::Claim => claimed.push(goal(e)),
             Kind::Land => *lands.entry(goal(e)).or_default() += 1,
             Kind::GateRun
-                if e.attr_str("recipe") == Some("land")
+                if e.attr_str(attr::RECIPE) == Some("land")
                     && matches!(e.outcome, Some(Outcome::Fail | Outcome::Refused)) =>
             {
                 refused += 1;
@@ -387,7 +388,7 @@ mod tests {
         let mut create = Event::new(at("2026-10-13T09:00:00Z"), Kind::Create, "bd");
         create.subject = Some("andon-xa4".into());
         create.ids.goal = create.subject.clone();
-        create.set_attr("budget", "about 8 agent-hours");
+        create.set_attr(attr::BUDGET, "about 8 agent-hours");
         let mut verdict = Event::new(at("2026-10-13T12:00:00Z"), Kind::Verdict, "bd");
         verdict.actor = Some("andon-1b".into());
         verdict.subject = Some("andon-xa4".into());

@@ -182,7 +182,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             let mut input = String::new();
             let _ = io::Read::read_to_string(&mut io::stdin(), &mut input);
             if *check {
-                let (report, ok) = hook_check(cli, &input, Timestamp::now());
+                let (report, ok) = hook_check(cli, &input, clock());
                 out.write_all(report.as_bytes())?;
                 return Ok(if ok {
                     ExitCode::SUCCESS
@@ -190,7 +190,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
                     ExitCode::from(1)
                 });
             }
-            match hook(cli, &input, Timestamp::now()) {
+            match hook(cli, &input, clock()) {
                 // a hook must never break the session: a write error, like any
                 // other, is explained on stderr and the hook exits 0
                 Ok(text) => {
@@ -207,7 +207,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Check { what } => {
-            let now = Timestamp::now();
+            let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
             let answer = check(what, &config, &ledger, now)?;
@@ -223,7 +223,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Ledger { since } => {
-            let config = load_config(cli, Timestamp::now())?;
+            let config = load_config(cli, clock())?;
             let ledger = load_ledger(cli, &config)?;
             let ledger = match since {
                 Some(since) => {
@@ -245,13 +245,13 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Command::Board { seat, json } => {
             // the board's instant is read before the sources, so every source
             // read after it covers it; the clock is read nowhere in the fold
-            let now = Timestamp::now();
+            let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
             show_board(out, &ledger, &config, now, seat.as_deref(), *json)
         }
         Command::Asof { when, seat, json } => {
-            let config = load_config(cli, Timestamp::now())?;
+            let config = load_config(cli, clock())?;
             let ledger = load_ledger(cli, &config)?;
             let asof = instant_or_day_end(when)?;
             show_board(out, &ledger, &config, asof, seat.as_deref(), *json)
@@ -259,7 +259,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Command::Scorecard { window, json } => {
             // `now` closes an open window; read before the sources, which then
             // cover it; the only clock read
-            let now = Timestamp::now();
+            let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
             let window = Window::parse(window, now)?;
@@ -574,6 +574,16 @@ fn show_board(
         out.write_all(render::board(&board).as_bytes())?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The clock, read where a command begins: the capture instant every
+/// adapter reads to, and every surface renders at.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "time enters here, at capture, and nowhere in a fold"
+)]
+fn clock() -> Timestamp {
+    Timestamp::now()
 }
 
 /// The config named by `--config`, or the nearest `andon.toml`.

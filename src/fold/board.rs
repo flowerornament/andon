@@ -5,14 +5,13 @@
 //! then, so a past board is reproduced exactly.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 
 use jiff::{SignedDuration, Timestamp};
-use regex::Regex;
 use serde::Serialize;
 
 use crate::config::Config;
 use crate::event::ALL_HISTORY;
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::fold::coverage::Coverage;
 use crate::fold::gauge::{Gauge, Gauger};
@@ -318,7 +317,7 @@ fn goals(
             let (amount, unit) = item
                 .budget
                 .as_deref()
-                .and_then(parse_budget)
+                .and_then(crate::goal::parse_budget)
                 .map_or((None, None), |(n, u)| (Some(n), Some(u)));
             let unit_read = unit.as_deref().unwrap_or(&config.board.budget_unit);
             let path = match unit_read {
@@ -399,33 +398,6 @@ fn spent(unit: &str, events: &[&Event], from: Timestamp, to: Timestamp) -> f64 {
     round2(value) + 0.0
 }
 
-static BUDGET: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(\d+(?:\.\d+)?)\s*(agent[- ]hours?|agent[- ]h\b|hours?|h\b|runs?|wall[- ]clock hours?|days?)",
-    )
-    .ok()
-});
-
-/// The first amount a budget states: `about 4 agent-hours` → (4, agent-hours).
-#[must_use]
-pub fn parse_budget(text: &str) -> Option<(f64, String)> {
-    let caps = BUDGET.as_ref()?.captures(text)?;
-    let n: f64 = caps.get(1)?.as_str().parse().ok()?;
-    let word = caps.get(2)?.as_str().to_lowercase();
-    let (n, unit) = if word.starts_with("agent") {
-        (n, "agent-hours")
-    } else if word.starts_with("run") {
-        (n, "runs")
-    } else if word.starts_with("day") {
-        (n * 24.0, "wall-clock")
-    } else if word.starts_with("wall") {
-        (n, "wall-clock")
-    } else {
-        (n, "agent-hours")
-    };
-    Some((n, unit.to_owned()))
-}
-
 /// Comments on the seat's goals since each was claimed.
 /// Comments on the lead goal (the one the seat's work cites) since it was
 /// claimed: what the seat has been told about the work in hand, not every
@@ -490,7 +462,7 @@ fn flags(
         && let Some(run) = events
             .iter()
             .rev()
-            .find(|e| e.kind == Kind::GateRun && e.attr_str("recipe") == Some("land"))
+            .find(|e| e.kind == Kind::GateRun && e.attr_str(attr::RECIPE) == Some("land"))
         && last_land.is_none_or(|l| run.t > l)
         && matches!(run.outcome, Some(Outcome::Fail | Outcome::Refused))
     {
@@ -716,23 +688,5 @@ mod tests {
             text.contains("x-shared is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=<seat> or bd update x-shared --assignee <seat>"),
             "{text}"
         );
-    }
-
-    #[test]
-    fn budgets_state_their_amount() {
-        assert_eq!(
-            parse_budget("One agent session (about 4 agent-hours)"),
-            Some((4.0, "agent-hours".to_owned()))
-        );
-        assert_eq!(
-            parse_budget("Two agent sessions (about 8 agent-hours)."),
-            Some((8.0, "agent-hours".to_owned()))
-        );
-        assert_eq!(parse_budget("30 runs"), Some((30.0, "runs".to_owned())));
-        assert_eq!(
-            parse_budget("2 days"),
-            Some((48.0, "wall-clock".to_owned()))
-        );
-        assert_eq!(parse_budget("small"), None);
     }
 }

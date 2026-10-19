@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
+use crate::commit::Commit;
 use crate::config::Config;
+use crate::event::attr;
 use crate::fold::{Index, Item};
 use crate::goal;
 use crate::ledger::Ledger;
@@ -55,37 +57,6 @@ pub fn claim_hint(config: &Config, id: &str) -> String {
     } else {
         format!("bd update {id} --claim")
     }
-}
-
-/// How a seat makes the tracker record it, not a shared identity.
-#[must_use]
-pub fn identity_hint(config: &Config, id: &str, seat: &str) -> String {
-    if config.adapters.github.is_some() {
-        format!(
-            "assign #{} to the account {seat} is known by: gh issue edit {} --add-assignee <login>",
-            id.trim_start_matches('#'),
-            id.trim_start_matches('#')
-        )
-    } else {
-        format!("set BEADS_ACTOR={seat} or bd update {id} --assignee {seat}")
-    }
-}
-
-/// [`identity_hint`] for no seat in particular (the board's note).
-#[must_use]
-pub fn identity_hint_any(id: &str) -> String {
-    format!("set BEADS_ACTOR=<seat> or bd update {id} --assignee <seat>")
-}
-
-/// A commit, as the check sees it.
-#[derive(Debug, Clone, Default)]
-pub struct Commit {
-    pub id: String,
-    pub title: String,
-    /// The whole message, for projects that cite goals outside the subject.
-    pub message: String,
-    /// The committing seat (trailer, workspace, or `--seat`).
-    pub seat: Option<String>,
 }
 
 /// `check commit`: the commit cites a goal its seat holds, within WIP.
@@ -156,7 +127,7 @@ fn held_by(item: &Item, goal: &str, seat: &str, config: &Config) -> Option<Strin
         (Some(owner), true) if !config.seats.is_empty() && !config.seats.contains_key(owner) => {
             Some(format!(
                 "{goal} is claimed by '{owner}', which is not a seat; {}",
-                identity_hint(config, goal, seat)
+                crate::seat::identity_hint(config, goal, seat)
             ))
         }
         (Some(owner), true) => Some(format!(
@@ -212,7 +183,7 @@ pub fn goal(
 fn open_in_pool(ledger: &Ledger, pool: &str, except: &str, now: Timestamp) -> Vec<String> {
     let mut pools: BTreeMap<&str, &str> = BTreeMap::new();
     for e in ledger.events() {
-        if let (Some(id), Some(p)) = (e.subject.as_deref(), e.attr_str("pool")) {
+        if let (Some(id), Some(p)) = (e.subject.as_deref(), e.attr_str(attr::POOL)) {
             pools.insert(id, p.trim());
         }
     }
@@ -394,7 +365,7 @@ mod tests {
         let c = config("");
         let mut events = ledger(&c).events().to_vec();
         let mut epic = item(Kind::Create, "2026-10-13T08:00:00Z", "andon-ep1", None);
-        epic.set_attr("item_type", "epic");
+        epic.set_attr(attr::ITEM_TYPE, "epic");
         events.push(epic);
         events.push(item(
             Kind::Claim,
@@ -481,7 +452,7 @@ mod tests {
         let c = config("[pools.core]\ncap = 1\nseats = [\"andon-1b\"]\n");
         let mut events: Vec<Event> = ledger(&c).events().to_vec();
         let mut pooled = item(Kind::Create, "2026-10-13T09:00:00Z", "andon-76c", None);
-        pooled.set_attr("pool", "core");
+        pooled.set_attr(attr::POOL, "core");
         events.push(pooled);
         let l = adapters::resolve(&c, events);
         let now = at("2026-10-13T12:00:00Z");

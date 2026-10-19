@@ -4,6 +4,11 @@
 //! snapshot of the JSON `gh` prints, so the test needs no network. Everything
 //! project-specific is in the config below.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures build the repositories and files andon reads"
+)]
+
 use std::path::Path;
 use std::process::Command;
 
@@ -226,7 +231,7 @@ fn check_commit_reads_a_git_repository() {
     assert!(commit.title.starts_with("Merge pull request #7"));
     let ledger = adapters::collect(&config).unwrap_or_else(|e| panic!("{e:#}"));
     let answer = andon::check::commit(
-        &andon::check::Commit {
+        &andon::commit::Commit {
             seat: Some("bot-1".into()),
             ..commit
         },

@@ -44,7 +44,7 @@ Agents, unlike people, pay nothing to create an item, a message or a run, so the
 Three contracts make it project-independent:
 
 1. **The goal schema.** The unit of work is a goal: why, a falsifiable done-when, a budget, a pool, an owner. The how belongs to the agent and never becomes a tracked item. The tracker stores goals; andon validates them.
-2. **The event ledger.** Every adapter emits one type: `{t, seat, kind, subject, ids{commit, change, goal, verdict, receipt, session}, outcome}`. Joins are by id, so a project's conventions (trailers, subject prefixes, branch names, bot accounts) live in adapter config, not in the fold.
+2. **The event ledger.** Every adapter emits one type: `{t, seat, kind, subject, ids{commit, change, goal, verdict, receipt, session}, outcome, attrs}`, where each attribute key is declared once with one meaning (`src/event.rs`). Joins are by id, so a project's conventions (trailers, subject prefixes, branch names, bot accounts) live in adapter config, not in the fold.
 3. **The refusals.** Called from the project's own choke points (its land or merge verb, its goal creation, its messenger's send), each exits non-zero and names the fix. andon does not own the choke point.
 
 ## Surfaces

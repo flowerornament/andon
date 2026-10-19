@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::adapters::run_tool;
 use crate::config::{Config, GithubConfig};
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::time::parse_instant;
 
@@ -241,14 +242,17 @@ fn issue_events(
     };
     let mut create = item(created, Kind::Create)?;
     create.actor = who(issue["author"]["login"].as_str());
-    create.set_attr("title", text(issue, "title").unwrap_or_default().to_owned());
+    create.set_attr(
+        attr::TITLE,
+        text(issue, "title").unwrap_or_default().to_owned(),
+    );
     let body = crate::goal::with_fields(text(issue, "body").unwrap_or_default(), issue, fields);
     let sections = crate::goal::sections(&body);
     if let Some(budget) = crate::goal::section(&sections, "budget") {
-        create.set_attr("budget", budget.to_owned());
+        create.set_attr(attr::BUDGET, budget.to_owned());
     }
     if let Some(pool) = crate::goal::section(&sections, "pool") {
-        create.set_attr("pool", pool.to_owned());
+        create.set_attr(attr::POOL, pool.to_owned());
     }
     out.push(create);
     let closed = text(issue, "state").is_some_and(|s| s.eq_ignore_ascii_case("closed"));
@@ -261,7 +265,7 @@ fn issue_events(
             .map_or(created, String::as_str);
         let mut claim = item(t, Kind::Claim)?;
         claim.actor = who(Some(login));
-        claim.set_attr("assignee", login.to_owned());
+        claim.set_attr(attr::ASSIGNEE, login.to_owned());
         out.push(claim);
     }
     if closed && let Some(t) = text(issue, "closedAt") {
@@ -273,7 +277,7 @@ fn issue_events(
         };
         let mut e = item(t, Kind::Other("other:comment".into()))?;
         e.actor = who(c["author"]["login"].as_str());
-        e.set_attr("comment", text(c, "id").unwrap_or_default().to_owned());
+        e.set_attr(attr::COMMENT, text(c, "id").unwrap_or_default().to_owned());
         out.push(e);
     }
     Ok(out)
@@ -307,14 +311,17 @@ fn pr_events(
     opened.ids.commit = pr["mergeCommit"]["oid"].as_str().map(str::to_owned);
     opened.subject = goals.first().cloned();
     opened.ids.goal.clone_from(&opened.subject);
-    opened.set_attr("goals", goals.clone());
+    opened.set_attr(attr::GOALS, goals.clone());
     opened.set_attr(
-        "branch",
+        attr::BRANCH,
         text(pr, "headRefName").unwrap_or_default().to_owned(),
     );
-    opened.set_attr("title", text(pr, "title").unwrap_or_default().to_owned());
     opened.set_attr(
-        "merged_at",
+        attr::TITLE,
+        text(pr, "title").unwrap_or_default().to_owned(),
+    );
+    opened.set_attr(
+        attr::MERGED_AT,
         text(pr, "mergedAt").unwrap_or_default().to_owned(),
     );
     out.push(opened);
@@ -341,11 +348,11 @@ fn pr_events(
         // the verdict is on the author's change; the reviewer is who gave it
         v.actor.clone_from(&author);
         v.set_attr(
-            "reviewer",
+            attr::REVIEWER,
             who(r["author"]["login"].as_str()).unwrap_or_default(),
         );
         // a review joins its landing by the pull request, not by a trailer
-        v.set_attr("join", "change");
+        v.set_attr(attr::JOIN, "change");
         out.push(v);
     }
     Ok(out)
@@ -377,18 +384,18 @@ fn run_event(run: &Value, gc: &GithubConfig, source: &str) -> Result<Option<Even
         .max_by_key(|(prefix, _)| prefix.len())
         .map(|(_, seat)| seat.clone());
     e.set_attr(
-        "recipe",
+        attr::RECIPE,
         text(run, "workflowName")
             .or_else(|| text(run, "name"))
             .unwrap_or_default()
             .to_owned(),
     );
-    e.set_attr("machine", "github-actions");
-    e.set_attr("branch", branch.to_owned());
+    e.set_attr(attr::MACHINE, "github-actions");
+    e.set_attr(attr::BRANCH, branch.to_owned());
     if e.outcome == Some(Outcome::Fail) {
         // GitHub keeps the run's logs: the reason is kept, at this address
         e.set_attr(
-            "reason",
+            attr::LOGS,
             text(run, "url").unwrap_or("logs kept by GitHub").to_owned(),
         );
     }
@@ -396,6 +403,7 @@ fn run_event(run: &Value, gc: &GithubConfig, source: &str) -> Result<Option<Even
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "a fixture captured now")]
 mod tests {
     use super::*;
 
@@ -468,7 +476,7 @@ mod tests {
             claim.t,
             parse_instant("2026-10-13T09:00:00Z").unwrap_or_else(|e| panic!("{e}"))
         );
-        assert_eq!(events[0].attr_str("budget"), Some("4 agent-hours"));
+        assert_eq!(events[0].attr_str(attr::BUDGET), Some("4 agent-hours"));
     }
 
     #[test]
@@ -486,7 +494,7 @@ mod tests {
         assert_eq!(verdicts[0].outcome, Some(Outcome::Return));
         assert_eq!(verdicts[0].ids.change.as_deref(), Some("pr#7"));
         assert_eq!(verdicts[0].actor.as_deref(), Some("bot-1"));
-        assert_eq!(verdicts[0].attr_str("reviewer"), Some("lead"));
+        assert_eq!(verdicts[0].attr_str(attr::REVIEWER), Some("lead"));
         assert_eq!(verdicts[1].outcome, Some(Outcome::Go));
     }
 
@@ -507,7 +515,7 @@ mod tests {
         assert_eq!(run.outcome, Some(Outcome::Fail));
         assert_eq!(run.actor.as_deref(), Some("bot-1"));
         assert!(
-            run.attr_str("reason")
+            run.attr_str(attr::LOGS)
                 .is_some_and(|r| r.ends_with("/runs/99"))
         );
     }

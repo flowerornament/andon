@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::config::Config;
+use crate::event::attr;
 use crate::event::{Event, Kind};
 
 /// Labels → seats, from configuration.
@@ -91,7 +92,7 @@ impl Resolver {
     /// Step 1: A configured cwd, alias or prefix.
     fn by_config(&self, events: &mut [Event]) {
         for event in events.iter_mut().filter(|e| e.seat.is_none()) {
-            let by_cwd = event.attr_str("cwd").and_then(|cwd| self.cwd(cwd));
+            let by_cwd = event.attr_str(attr::CWD).and_then(|cwd| self.cwd(cwd));
             event.seat = by_cwd.or_else(|| event.actor.as_deref().and_then(|a| self.label(a)));
         }
     }
@@ -101,21 +102,21 @@ impl Resolver {
     fn recipients(&self, events: &mut [Event], desk_seat: &HashMap<String, String>) {
         for event in events.iter_mut() {
             if matches!(event.kind, Kind::Create | Kind::Claim)
-                && let Some(seat) = event.attr_str("assignee").and_then(|a| self.label(a))
+                && let Some(seat) = event.attr_str(attr::ASSIGNEE).and_then(|a| self.label(a))
             {
-                event.set_attr("assignee_seat", seat);
+                event.set_attr(attr::ASSIGNEE_SEAT, seat);
             }
             if event.kind != Kind::Message {
                 continue;
             }
             let mut seats: Vec<String> = event
-                .attr_strs("to")
+                .attr_strs(attr::TO)
                 .into_iter()
                 .filter_map(|label| self.label(label).or_else(|| desk_seat.get(label).cloned()))
                 .collect();
             seats.sort();
             seats.dedup();
-            event.set_attr("to_seats", seats);
+            event.set_attr(attr::TO_SEATS, seats);
         }
     }
 }
@@ -248,6 +249,26 @@ fn most(counts: &BTreeMap<String, usize>) -> Option<String> {
         }
     }
     best.map(|(k, _)| k.clone())
+}
+
+/// How a seat makes the tracker record it, not a shared identity.
+#[must_use]
+pub fn identity_hint(config: &Config, id: &str, seat: &str) -> String {
+    if config.adapters.github.is_some() {
+        format!(
+            "assign #{} to the account {seat} is known by: gh issue edit {} --add-assignee <login>",
+            id.trim_start_matches('#'),
+            id.trim_start_matches('#')
+        )
+    } else {
+        format!("set BEADS_ACTOR={seat} or bd update {id} --assignee {seat}")
+    }
+}
+
+/// [`identity_hint`] for no seat in particular (the board's note).
+#[must_use]
+pub fn identity_hint_any(id: &str) -> String {
+    format!("set BEADS_ACTOR=<seat> or bd update {id} --assignee <seat>")
 }
 
 #[cfg(test)]

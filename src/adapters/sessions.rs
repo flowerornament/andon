@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::adapters::Reads;
 use crate::config::{Config, SessionsConfig, wildcard};
+use crate::event::attr;
 use crate::event::{Event, Kind};
 use crate::time::parse_instant;
 
@@ -437,8 +438,8 @@ pub fn spans(
         e.actor.clone_from(&actor);
         e.ids.session.clone_from(&session);
         e.ids.critic_session.clone_from(&critic);
-        e.set_attr("cwd", cwd.to_owned());
-        e.set_attr("harness", t.harness);
+        e.set_attr(attr::CWD, cwd.to_owned());
+        e.set_attr(attr::HARNESS, t.harness);
         e
     };
     let mut out = Vec::new();
@@ -461,14 +462,14 @@ pub fn spans(
             let mut e = make(start, Kind::SessionActive);
             e.t_end = Some(end);
             #[allow(clippy::cast_possible_wrap)]
-            e.set_attr("calls", n as i64);
+            e.set_attr(attr::CALLS, n as i64);
             e
         })
         .collect();
     for (ts, what) in &t.spawns {
         if since.is_none_or(|s| *ts >= s) {
             let mut e = make(*ts, Kind::Spawn);
-            e.set_attr("description", what.clone());
+            e.set_attr(attr::DESCRIPTION, what.clone());
             events.push(e);
         }
     }
@@ -486,6 +487,10 @@ fn most(counts: &BTreeMap<String, usize>) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures write the transcripts they read"
+)]
 mod tests {
     use super::*;
 
