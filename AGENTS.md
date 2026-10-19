@@ -31,7 +31,7 @@ Each writing agent gets its own workspace, so it never snapshots another agent's
 - **Work:** `jj new main`, edit, then `jj describe -m "area: subject (andon-xxx)"`. To pick up others' work, `jj rebase -d main`.
 - **Publish:** `just land`. It runs `just check` on your change, with any described commits beneath it, and only then moves `main` and pushes it. It refuses undescribed commits in the range, a stale parent, and any edit made while the check ran. With no `origin` remote it moves `main` and pushes nothing. Never `jj git push` by hand: that skips the gate.
 - **Trailers:** a SessionStart hook (`scripts/jj-identity`) adds `Jj-Workspace:`, `Agent:` and `Session:` to every description. Don't type or strip them; andon's own commit → session join reads them.
-- **Git:** run it only in `~/code/andon`, and only to read. A workspace has no `.git`, and `~/.git` exists, so git in a workspace silently answers about your home directory.
+- **Git:** run it only in `~/code/andon`, and only to read. In a workspace, git never answers about main. A workspace made by `just workspace-add` has no `.git`, and `~/.git` exists, so git there answers about your home directory. One made colocated (jj 0.46's default, as andon-1a and andon-1b were) has a `.git` file, so git there answers about that workspace's own git worktree.
 - **Processes:** stop a process only by its exact pid. Never `pkill -f`, `killall` or any pattern match: this machine is shared by many agents' seats.
 - **Stale workspace:** when another agent rewrites a commit under your `@`, run `jj workspace update-stale`. Never `jj edit` a change that is an ancestor of another workspace's `@`.
 - **Recovery:** start with `jj op log`, `jj undo` or `jj op restore`, before any destructive file operation. The `jj-ops` skill has the full model.
@@ -55,10 +55,10 @@ Commands: `bd ready`, `bd show <id>`, `bd update <id> --claim`, `bd close <id>`.
 
 ## Release
 
-Cargo.toml's version is the one version source (`andon --version`, `package.nix`, the release tooling). From `~/code/andon`, never a workspace:
+Cargo.toml's version is the one version source (`andon --version`, `package.nix`, the release tooling).
 
-1. `just release-bump X.Y.Z`, fill the CHANGELOG entry, describe and `just land`.
-2. Wait for the Nix Cache workflow on that commit (`just cache-verify`).
+1. In your workspace, under a goal you hold: `just release-bump X.Y.Z`, fill the CHANGELOG entry, describe and `just land`.
+2. The rest runs in `~/code/andon`, never a workspace, with its working copy on main (`jj new main`); `release-verify` and `release-tag` refuse anywhere else. Wait for the Nix Cache workflow on that commit (`just cache-verify`).
 3. `just release-verify`, then `just release-tag X.Y.Z`: it tags, pushes the tag and moves `origin/release`. `.github/workflows/release.yml` publishes the GitHub release with the CHANGELOG section and binaries for four targets.
 
 `package.nix` builds from an allowlist (`Cargo.toml`, `Cargo.lock`, `src`, `tests`); add a path there when the build or its tests start reading it. `.design/` never enters the package.

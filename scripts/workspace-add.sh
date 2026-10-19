@@ -5,6 +5,8 @@
 # Usage: scripts/workspace-add.sh <name>   (e.g. andon-2b: pair 2, implementer)
 #
 # Runs only from the colocated checkout, which owns .git and the bd database.
+# --no-colocate: jj 0.46 would otherwise make the workspace a git worktree
+# with a .git file, and git there would answer for the workspace's HEAD.
 # Claude Code keys memory by directory (its absolute path with `/` and `.` as
 # `-`, under $CLAUDE_CONFIG_DIR/projects, default ~/.claude), and a workspace
 # would otherwise start with none.
@@ -17,7 +19,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 dest="$(dirname "$root")/$name"
 [ ! -e "$dest" ] || { echo "workspace-add: $dest already exists" >&2; exit 1; }
 
-(cd "$root" && jj workspace add --name "$name" -r main "$dest")
+(cd "$root" && jj workspace add --no-colocate --name "$name" -r main "$dest")
 mkdir -p "$dest/.beads"
 printf '../%s/.beads\n' "${root##*/}" > "$dest/.beads/redirect"
 

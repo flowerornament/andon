@@ -54,9 +54,11 @@ remote="${LAND_REMOTE:-origin}"
 
 refuse() { echo "land: refused: $*" >&2; exit 1; }
 
-# One commit id for a revset, or empty when it names none. The first call in
-# an observation snapshots the working copy, so later calls see current files.
-rev() { jj log --no-graph -r "$1" -T 'commit_id ++ "\n"' 2>/dev/null | head -1; }
+# One commit id for a revset, or empty when it names none (callers wrap a name
+# that may not exist in present()). The first call in an observation snapshots
+# the working copy, so later calls see current files. jj's errors stay on
+# stderr: a stale workspace must say so, not read as "nothing to publish".
+rev() { jj log --no-graph --limit 1 -r "$1" -T 'commit_id ++ "\n"'; }
 
 observe() {
   at="$(rev '@')"

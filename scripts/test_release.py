@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/release.py (pure text functions, no git or nix)."""
+"""Unit tests for scripts/release.py (pure functions and temp dirs, no git or nix)."""
 
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -95,6 +96,18 @@ class ChangelogTests(unittest.TestCase):
         version = release.manifest_version_text(release.MANIFEST.read_text(encoding="utf-8"))
         text = release.CHANGELOG.read_text(encoding="utf-8")
         self.assertTrue(release.changelog_text_has_entry(text, version), f"CHANGELOG.md has no entry for {version}")
+
+
+class CheckoutTests(unittest.TestCase):
+    def test_only_a_git_directory_is_the_colocated_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertFalse(release.is_colocated_checkout(root), "a workspace with no .git")
+            (root / ".git").write_text("gitdir: ../andon/.git/worktrees/andon-1a\n")
+            self.assertFalse(release.is_colocated_checkout(root), "a colocated workspace's .git file")
+            (root / ".git").unlink()
+            (root / ".git").mkdir()
+            self.assertTrue(release.is_colocated_checkout(root))
 
 
 if __name__ == "__main__":

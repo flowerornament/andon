@@ -187,7 +187,7 @@ def bump(version: str) -> None:
     print(f"updated release version to {version}")
     print("  - Cargo.toml, Cargo.lock")
     print("  - CHANGELOG.md")
-    print("Fill in the CHANGELOG.md entry, describe the change and `just land` it, then release from ~/code/andon.")
+    print("Fill in the CHANGELOG.md entry, describe the change and `just land` it from this workspace, then verify and tag from ~/code/andon.")
 
 
 def run(cmd: list[str]) -> None:
@@ -207,10 +207,16 @@ def command_succeeds(cmd: list[str]) -> bool:
     )
 
 
+def is_colocated_checkout(root: Path) -> bool:
+    # Only the colocated checkout has a .git directory. A jj workspace has none,
+    # so git there walks up to a parent repository (~/.git exists); one added
+    # colocated (jj 0.46's default) has a .git file naming a git worktree,
+    # whose HEAD is that workspace's, not main's.
+    return (root / ".git").is_dir()
+
+
 def require_colocated_checkout() -> None:
-    # A jj workspace has no .git, so git there walks up to a parent repository
-    # (~/.git exists) and answers about it without complaint.
-    if not (ROOT / ".git").exists():
+    if not is_colocated_checkout(ROOT):
         fail(f"{ROOT} is a jj workspace; release from the colocated checkout (~/code/andon)")
 
 
