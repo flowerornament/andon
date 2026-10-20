@@ -172,6 +172,9 @@ const CASES: &[Case] = &[
         input: "a session file that is not JSON",
         expect: Expect::Gap(&["state:presence"]),
         build: |dir| {
+            if !has("ps") {
+                return None;
+            }
             write(&dir.join("sessions/1.json"), "{not json");
             Some("[adapters.presence]\nclaude = [\"sessions\"]\n".to_owned())
         },

@@ -4,6 +4,12 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+## v0.3.0 - 2026-10-19
+
+Supervision you can build on: every attribute and adapter is held to a
+stated contract, the board is one projection with typed gauges, and two
+new facts, who is running now and which unlanded files two seats share.
+
 - **Tracker history from bd's events** (`.design/2026-10-14-coverage.md`,
   amendment of 2026-10-20). Where bd serves SQL, claims, closes, reopens
   and assignments are read from its events table as history. Each row's
@@ -13,12 +19,6 @@ All notable changes to `andon` are documented in this file.
   now known for past windows. New kinds `reopen` and `assign`. New config:
   `[adapters.bd] events`, `events_zone`, `events_utc_from`.
   `tracker.closed` counts items closed, not closes.
-
-## v0.3.0 - 2026-10-19
-
-Supervision you can build on: every attribute and adapter is held to a
-stated contract, the board is one projection with typed gauges, and two
-new facts, who is running now and which unlanded files two seats share.
 
 - **Presence** (`.design/2026-10-19-overlap-and-presence.md` §2). With
   `[adapters.presence]`, andon reads Claude Code's per-session files and

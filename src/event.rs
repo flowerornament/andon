@@ -668,7 +668,10 @@ mod tests {
         }
     }
 
+    // the shape check is a debug assertion: release builds (the Nix
+    // package runs its tests in one) leave it out
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "attribute recipe is text")]
     fn a_value_of_the_wrong_shape_is_refused() {
         let mut event = Event::new(Timestamp::UNIX_EPOCH, Kind::Run, "test");
