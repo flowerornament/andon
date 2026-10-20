@@ -244,7 +244,7 @@ fn check(
     // a check that reads goals cannot decide (exit 2), it does not guess
     let tracker = || {
         crate::fold::coverage::Coverage::new(ledger)
-            .check_state(&["create", "claim", "close"], None, now)
+            .check_state(crate::fold::gauge::TRACKER, None, now)
             .map_or(Ok(()), |why| {
                 Err(anyhow!(
                     "the tracker is not covered ({why}); configure a tracker adapter"

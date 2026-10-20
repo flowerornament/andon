@@ -215,7 +215,14 @@ pub fn events(
         (
             "issues.json",
             &s.issues,
-            &["create", "claim", "close", "other:comment"][..],
+            &[
+                "create",
+                "claim",
+                "close",
+                "reopen",
+                "assign",
+                "other:comment",
+            ][..],
             "issues",
             true,
         ),
@@ -267,6 +274,16 @@ fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
+/// What an issue yields.
+const ISSUE: &[&str] = &[
+    "create",
+    "claim",
+    "close",
+    "reopen",
+    "assign",
+    "other:comment",
+];
+
 fn issue_events(
     issue: &Value,
     gc: &GithubConfig,
@@ -276,7 +293,6 @@ fn issue_events(
     fields: &std::collections::BTreeMap<String, crate::config::GoalField>,
     now: jiff::Timestamp,
 ) -> Result<Vec<Event>> {
-    const ISSUE: &[&str] = &["create", "claim", "close", "other:comment"];
     let mut out = Vec::new();
     let Some(n) = issue["number"].as_i64() else {
         out.push(unplaced(now, ISSUE, source, "an issue has no number"));

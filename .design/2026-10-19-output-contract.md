@@ -133,3 +133,11 @@ not read, or where one could not be read. `flags[]` gains `overlaps <seat>
 on N files (...)`, and `overlaps ?` where a workspace was looked at and
 could not be read. The columns are unchanged. Schema 3 is unreleased, so
 this joins it rather than moving the number again.
+
+## Amendment: items closed (2026-10-20, andon-nqi)
+
+`tracker.closed` is the number of items closed in the window: an item
+closed, reopened and closed again counts once, as branching (items spawned
+per item closed) needs. Before bd's events were read, no source could
+record a second close, so no earlier output changes, and the scorecard
+stays at schema 2.

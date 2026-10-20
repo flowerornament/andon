@@ -76,7 +76,9 @@ impl<'a> Index<'a> {
                         }
                     }
                 }
-                Kind::Create | Kind::Claim | Kind::Close => index.items.push(event),
+                Kind::Create | Kind::Claim | Kind::Close | Kind::Reopen | Kind::Assign => {
+                    index.items.push(event);
+                }
                 _ => {}
             }
         }
@@ -142,6 +144,18 @@ impl<'a> Index<'a> {
                 Kind::Close => {
                     item.closed = true;
                     item.closed_at = Some(event.t);
+                }
+                Kind::Reopen => item.closed = false,
+                // an assignment names an owner; cleared, nobody holds it
+                Kind::Assign => {
+                    item.owner = event
+                        .attr_str(attr::ASSIGNEE_SEAT)
+                        .or_else(|| event.attr_str(attr::ASSIGNEE))
+                        .filter(|a| !a.is_empty())
+                        .map(str::to_owned);
+                    if item.owner.is_none() {
+                        item.claimed = false;
+                    }
                 }
                 _ => {}
             }

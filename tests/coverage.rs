@@ -50,6 +50,8 @@ const KINDS: &[&str] = &[
     "create",
     "claim",
     "close",
+    "reopen",
+    "assign",
     "other:comment",
     "session_active",
     "unlanded",
@@ -132,9 +134,17 @@ fn day(fault: Option<(&str, Fault)>, drop: Option<&str>) -> Ledger {
         edit("2026-10-13T12:30:00Z", "x-1a"),
         edit("2026-10-13T13:30:00Z", "x-1b"),
     );
+    // x-old was closed and reopened, and x-other assigned to x-1b: both
+    // open at the end, one owned
+    let old = fact("2026-10-13T08:05:00Z", Kind::Create, Some("x-old"));
+    let old_closed = fact("2026-10-13T08:10:00Z", Kind::Close, Some("x-old"));
+    let reopened = fact("2026-10-13T08:20:00Z", Kind::Reopen, Some("x-old"));
+    let other = fact("2026-10-13T08:05:00Z", Kind::Create, Some("x-other"));
+    let mut assigned = fact("2026-10-13T08:30:00Z", Kind::Assign, Some("x-other"));
+    assigned.set_attr(attr::ASSIGNEE, "x-1b");
     let mut sources = Vec::new();
     for kind in KINDS.iter().copied() {
-        let tracker = ["create", "claim", "close", "unlanded"].contains(&kind);
+        let tracker = ["create", "claim", "close", "reopen", "assign", "unlanded"].contains(&kind);
         let from = if tracker {
             ALL_HISTORY
         } else {
@@ -162,7 +172,7 @@ fn day(fault: Option<(&str, Fault)>, drop: Option<&str>) -> Ledger {
         &config(),
         vec![
             land, start, run, gate, verdict, message, create, claim, comment, span, land_b,
-            verdict_b, edit_a, edit_b,
+            verdict_b, edit_a, edit_b, old, old_closed, reopened, other, assigned,
         ]
         .into_iter()
         .filter(|e| drop.is_none_or(|k| e.kind.as_str() != k))
@@ -218,11 +228,11 @@ fn expect(kind: &str) -> (&'static [&'static str], &'static [&'static str]) {
             &["items_created", "wip_at_end"],
             &["tracker.created", "tracker.open_at_end"],
         ),
-        "claim" => (
+        "close" => (&["wip_at_end"], &["tracker.closed", "tracker.branching"]),
+        "claim" | "reopen" | "assign" => (
             &["wip_at_end"],
             &["tracker.open_at_end", "tracker.unowned_at_end"],
         ),
-        "close" => (&["wip_at_end"], &["tracker.closed", "tracker.branching"]),
         "session_active" => (&["active_hours"], &["joins.landing_session_seen"]),
         _ => (&[], &[]),
     }

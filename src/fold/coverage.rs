@@ -29,6 +29,10 @@ struct Gap {
     /// The span the unreadable facts lie in, when the store says
     /// (`event::gap_at`, `event::gap_over`); `None` stands over every span.
     within: Option<(Timestamp, Timestamp)>,
+    /// Only when its facts happened is unknown, within `within`: they are
+    /// in the ledger at the latest instant they could have been. A count or
+    /// a state is unknown only where an end of what is asked falls inside.
+    timing: bool,
 }
 
 /// What the ledger covers.
@@ -61,6 +65,7 @@ impl Coverage {
                     covers,
                     seat: scope(e),
                     within: e.t_end.map(|end| (e.t, end)),
+                    timing: e.attr_bool(attr::TIMING) == Some(true),
                     reason: e
                         .attr_str(attr::GAP_REASON)
                         .unwrap_or("unreadable")
@@ -162,7 +167,13 @@ impl Coverage {
             .iter()
             .filter(|g| {
                 g.covers.iter().any(|c| c == kind)
-                    && g.within.is_none_or(|(a, b)| a <= to && from <= b)
+                    && match (g.within, g.timing) {
+                        // the facts are counted at `b`, and happened in
+                        // `a..=b`: only an end of the ask inside is unsure
+                        (Some((a, b)), true) => (a < from && from <= b) || (a <= to && to < b),
+                        (Some((a, b)), false) => a <= to && from <= b,
+                        (None, _) => true,
+                    }
                     && match (&g.seat, seat) {
                         (None, _) | (_, None) => true,
                         (Some(scoped), Some(seat)) => scoped == seat,
@@ -434,6 +445,53 @@ mod tests {
                 None,
                 at("2026-10-16T00:00:00Z"),
                 at("2026-10-17T00:00:00Z")
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn a_gap_in_when_only_is_unknown_where_an_end_of_the_ask_falls_inside() {
+        // a close happened between 10:00 and 12:00, and is counted at 12:00
+        let mut g = crate::event::gap_over(
+            at("2026-10-13T10:00:00Z"),
+            at("2026-10-13T12:00:00Z"),
+            &["close"],
+            "bd events",
+            None,
+            "which correction",
+        );
+        g.set_attr(crate::event::attr::TIMING, true);
+        let c = cov(vec![
+            coverage(crate::event::ALL_HISTORY, None, &["close"], "bd", None),
+            g,
+        ]);
+        let ask = |from: &str, to: &str| c.check(&["close"], None, at(from), at(to));
+        // a window holding the whole span, or clear of it: known
+        assert_eq!(ask("2026-10-13T00:00:00Z", "2026-10-14T00:00:00Z"), None);
+        assert_eq!(ask("2026-10-13T12:00:01Z", "2026-10-14T00:00:00Z"), None);
+        // from its last instant: counted there, but it may have been before
+        assert!(ask("2026-10-13T12:00:00Z", "2026-10-14T00:00:00Z").is_some());
+        assert_eq!(ask("2026-10-12T00:00:00Z", "2026-10-13T09:00:00Z"), None);
+        // an end inside it: unknown
+        assert!(ask("2026-10-13T11:00:00Z", "2026-10-14T00:00:00Z").is_some());
+        assert!(ask("2026-10-13T00:00:00Z", "2026-10-13T11:00:00Z").is_some());
+        // a state after it is known, inside it is not
+        assert_eq!(
+            c.check(
+                &["close"],
+                None,
+                crate::event::ALL_HISTORY,
+                at("2026-10-13T12:00:00Z")
+            ),
+            None
+        );
+        assert!(
+            c.check(
+                &["close"],
+                None,
+                crate::event::ALL_HISTORY,
+                at("2026-10-13T11:00:00Z")
             )
             .is_some()
         );

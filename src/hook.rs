@@ -623,6 +623,8 @@ mod tests {
                 "create",
                 "claim",
                 "close",
+                "reopen",
+                "assign",
                 "other:comment",
                 "session_active",
             ],
@@ -743,7 +745,9 @@ mod tests {
         let all = crate::event::coverage(
             crate::event::ALL_HISTORY,
             None,
-            &["land", "verdict", "commit", "gate_run", "claim", "close"],
+            &[
+                "land", "verdict", "commit", "gate_run", "claim", "close", "reopen", "assign",
+            ],
             "test",
             None,
         );

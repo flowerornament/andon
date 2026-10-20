@@ -517,6 +517,21 @@ pub struct BdConfig {
     pub verdicts: Option<VerdictFormat>,
     #[serde(default)]
     pub since: Option<String>,
+    /// Read claims, closes, reopens and assignments as history from bd's
+    /// events table (`bd sql`), where bd can serve it. Without it, or where
+    /// bd cannot (an embedded database), they are the export's current state.
+    #[serde(default = "yes")]
+    pub events: bool,
+    /// The zone bd wrote local times in, for rows stored as local time
+    /// labelled UTC: an IANA name or a POSIX TZ string. Default: this
+    /// machine's zone.
+    #[serde(default)]
+    pub events_zone: Option<String>,
+    /// The first instant (as stored) from which every row is true UTC, and
+    /// before which every row is local time. Absent: each row is resolved
+    /// by calibrating against the issues' own timestamps.
+    #[serde(default)]
+    pub events_utc_from: Option<String>,
 }
 
 /// A verdict comment: a prefix, then a JSON object. Each field names where

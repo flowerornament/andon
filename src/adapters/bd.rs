@@ -9,12 +9,20 @@
 //! An export is current state: a claim later released shows only as its
 //! present owner, and of a goal closed twice only the last close shows. So
 //! it covers claims and closes as the state at the capture instant
-//! (`state:claim`, `state:close`), never as history; a kept ledger (`andon
-//! ledger`, captured over time) is how a project keeps that history.
+//! (`state:claim`, `state:close`), never as history.
+//!
+//! History comes from bd's events table, where bd can serve SQL (`bd sql`;
+//! an embedded database cannot): `claim`, `close`, `reopen` and `assign`,
+//! each row's stored time resolved by [`Clock`], replacing the export's
+//! claims and closes. A change the table never recorded is reconciled
+//! against the export.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 
 use crate::adapters::run_tool_in;
@@ -46,12 +54,23 @@ pub fn collect(config: &Config, bc: &BdConfig) -> Result<Vec<Event>> {
     let since = bc.since.as_deref().map(parse_instant).transpose()?;
     let source = format!("bd export ({})", dir.display());
     let mut events = Vec::new();
+    let mut current = HashMap::new();
     for (i, line) in out.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
         let issue: Value = serde_json::from_str(line)
             .with_context(|| format!("bd export line {} is not JSON", i + 1))?;
+        if let Some(id) = text(&issue, "id") {
+            current.insert(
+                id.to_owned(),
+                Current {
+                    closed: text(&issue, "status") == Some("closed"),
+                    assignee: text(&issue, "assignee").unwrap_or_default().to_owned(),
+                    updated: text(&issue, "updated_at").and_then(|t| parse_instant(t).ok()),
+                },
+            );
+        }
         events.extend(issue_events(&issue, config, bc, &source)?);
     }
     if let Some(since) = since {
@@ -78,12 +97,500 @@ pub fn collect(config: &Config, bc: &BdConfig) -> Result<Vec<Event>> {
         events.push(crate::event::coverage(
             now,
             Some(now),
-            &["state:create", "state:claim", "state:close"],
-            source,
+            &STATE,
+            source.clone(),
             None,
         ));
     }
+    if bc.events
+        && let Some(rows) = event_rows(&dir)
+    {
+        with_history(&mut events, &rows, &current, bc, &source, since, now)?;
+    }
     Ok(events)
+}
+
+/// An issue as the export holds it now.
+#[derive(Debug, Clone, Default)]
+pub struct Current {
+    pub closed: bool,
+    pub assignee: String,
+    pub updated: Option<Timestamp>,
+}
+
+/// Replace the export's claims and closes with bd's events: history, where
+/// bd can serve it. The export's creations stay, with the assignee each
+/// issue had then.
+fn with_history(
+    events: &mut Vec<Event>,
+    rows: &[Row],
+    current: &HashMap<String, Current>,
+    bc: &BdConfig,
+    source: &str,
+    since: Option<Timestamp>,
+    now: Timestamp,
+) -> Result<()> {
+    let clock = Clock::new(bc, rows, &anchors_of(events))?;
+    let (mut history, at_creation) = history(rows, &clock, source, now);
+    events.retain(|e| !matches!(e.kind, Kind::Claim | Kind::Close));
+    for e in events.iter_mut().filter(|e| e.kind == Kind::Create) {
+        // the export's assignee is today's; the events say who it was
+        if let Some(a) = e.subject.as_ref().and_then(|id| at_creation.get(id)) {
+            e.remove_attr(attr::ASSIGNEE);
+            e.set_attr(attr::ASSIGNEE, a.clone());
+        }
+    }
+    let created: HashMap<String, (Timestamp, String)> = events
+        .iter()
+        .filter(|e| e.kind == Kind::Create)
+        .filter_map(|e| {
+            let id = e.subject.clone()?;
+            Some((
+                id,
+                (
+                    e.t,
+                    e.attr_str(attr::ASSIGNEE).unwrap_or_default().to_owned(),
+                ),
+            ))
+        })
+        .collect();
+    let missed = reconcile(&history, current, &created, source, now);
+    history.extend(missed);
+    events.extend(
+        history
+            .into_iter()
+            .filter(|e| e.kind == Kind::Coverage || since.is_none_or(|s| e.t >= s)),
+    );
+    events.push(crate::event::coverage(
+        since.unwrap_or(crate::event::ALL_HISTORY),
+        Some(now),
+        HISTORY,
+        format!("bd events ({source})"),
+        None,
+    ));
+    Ok(())
+}
+
+/// The changes bd's events never recorded. Folded to now, each issue's
+/// history must agree with the export's present state; where it does not,
+/// a change went unrecorded (bd journals only its own write paths). It
+/// happened after the issue's last recorded row and no later than its last
+/// update: the export's state is put there, with a gap saying when is
+/// unsure.
+fn reconcile(
+    history: &[Event],
+    current: &HashMap<String, Current>,
+    created: &HashMap<String, (Timestamp, String)>,
+    source: &str,
+    now: Timestamp,
+) -> Vec<Event> {
+    let mut by_issue: HashMap<&str, Vec<&Event>> = HashMap::new();
+    for e in history.iter().filter(|e| e.kind != Kind::Coverage) {
+        if let Some(id) = e.subject.as_deref() {
+            by_issue.entry(id).or_default().push(e);
+        }
+    }
+    let mut out = Vec::new();
+    let mut ids: Vec<&String> = current.keys().collect();
+    ids.sort();
+    for id in ids {
+        let now_state = &current[id];
+        let (mut last, mut owner) = created
+            .get(id)
+            .cloned()
+            .unwrap_or((crate::event::ALL_HISTORY, String::new()));
+        let mut closed = false;
+        let mut rows = by_issue.remove(id.as_str()).unwrap_or_default();
+        rows.sort_by_key(|e| (e.t, rank(&e.kind)));
+        for e in rows {
+            last = last.max(e.t);
+            match e.kind {
+                Kind::Claim => {
+                    e.attr_str(attr::ASSIGNEE)
+                        .unwrap_or_default()
+                        .clone_into(&mut owner);
+                    closed = false;
+                }
+                Kind::Close => closed = true,
+                Kind::Reopen => closed = false,
+                Kind::Assign => e
+                    .attr_str(attr::ASSIGNEE)
+                    .unwrap_or_default()
+                    .clone_into(&mut owner),
+                _ => {}
+            }
+        }
+        let mut kinds = Vec::new();
+        if closed != now_state.closed {
+            kinds.push(if now_state.closed {
+                Kind::Close
+            } else {
+                Kind::Reopen
+            });
+        }
+        if owner != now_state.assignee {
+            kinds.push(Kind::Assign);
+        }
+        if kinds.is_empty() {
+            continue;
+        }
+        let at = now_state
+            .updated
+            .filter(|u| *u >= last && *u <= now)
+            .unwrap_or(now);
+        let covers: Vec<&str> = kinds.iter().map(Kind::as_str).collect();
+        let mut gap = crate::event::gap_over(
+            last,
+            at,
+            &covers,
+            format!("bd events ({source})"),
+            None,
+            format!(
+                "bd events ({source}): {id} changed ({}) with no row recorded, after {last} and by {at}",
+                covers.join(", ")
+            ),
+        );
+        gap.set_attr(attr::TIMING, true);
+        out.push(gap);
+        for kind in kinds {
+            let mut e = Event::new(at, kind.clone(), format!("bd events ({source})"));
+            e.subject = Some(id.clone());
+            e.ids.goal = Some(id.clone());
+            if kind == Kind::Assign {
+                e.set_attr(attr::ASSIGNEE, now_state.assignee.clone());
+            }
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// The tracker's state at the capture, as the export holds it.
+const STATE: [&str; 5] = [
+    "state:create",
+    "state:claim",
+    "state:close",
+    "state:reopen",
+    "state:assign",
+];
+
+/// What bd's events table is read for.
+const HISTORY: &[&str] = &["claim", "close", "reopen", "assign"];
+
+/// One row of bd's events table, with only what andon reads.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Row {
+    pub issue_id: String,
+    pub event_type: String,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub new_value: Option<String>,
+    /// The time as bd stored it: true UTC, or local time labelled UTC.
+    pub created_at: String,
+    /// The assignee before the change, where the row keeps the issue as it
+    /// was (`old_known`).
+    #[serde(default)]
+    pub old_assignee: Option<String>,
+    #[serde(default)]
+    pub old_known: Option<i64>,
+}
+
+/// The rows andon reads, from `bd sql`; `None` where bd cannot serve SQL
+/// (an embedded database) or the read fails, and the export stands alone.
+fn event_rows(dir: &Path) -> Option<Vec<Row>> {
+    const QUERY: &str = "SELECT issue_id, event_type, actor, new_value, created_at, \
+        CASE WHEN old_value LIKE '{%' THEN JSON_UNQUOTE(JSON_EXTRACT(old_value, '$.assignee')) END AS old_assignee, \
+        (old_value LIKE '{%') AS old_known FROM events \
+        WHERE event_type IN ('created', 'claimed', 'closed', 'reopened') \
+        OR (event_type IN ('updated', 'status_changed') AND new_value LIKE '%\"assignee\"%')";
+    let out = run_tool_in(dir, "bd", &["sql", "--json", QUERY], "install bd").ok()?;
+    serde_json::from_str(&out).ok()
+}
+
+/// Each issue's own timestamps, which calibrate the rows: when it was
+/// created, and when it was last closed.
+fn anchors_of(events: &[Event]) -> HashMap<String, (Option<Timestamp>, Option<Timestamp>)> {
+    let mut out: HashMap<String, (Option<Timestamp>, Option<Timestamp>)> = HashMap::new();
+    for e in events {
+        let Some(id) = e.subject.clone() else {
+            continue;
+        };
+        let entry = out.entry(id).or_default();
+        match e.kind {
+            Kind::Create => entry.0 = Some(e.t),
+            Kind::Close => entry.1 = Some(e.t),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// How a row's stored time becomes an instant. bd once wrote local time
+/// labelled UTC (in whatever zone the machine was in), and later true UTC,
+/// so no single correction holds. A row whose issue timestamps pin it (a
+/// creation, a last close) says the correction in force when it was
+/// written; any other row takes the correction of the pinned rows around
+/// it, or, with a configured cutover, local time before and UTC after.
+pub struct Clock {
+    zone: TimeZone,
+    utc_from: Option<Timestamp>,
+    /// Pinned rows, by stored time, with the correction each needed.
+    pinned: Vec<(Timestamp, SignedDuration)>,
+}
+
+/// The largest correction a time zone can need.
+const MAX_OFFSET: SignedDuration = SignedDuration::from_hours(14);
+
+impl Clock {
+    /// # Errors
+    /// When the configured zone or cutover cannot be read.
+    pub fn new(
+        bc: &BdConfig,
+        rows: &[Row],
+        issues: &HashMap<String, (Option<Timestamp>, Option<Timestamp>)>,
+    ) -> Result<Self> {
+        let zone = match bc.events_zone.as_deref() {
+            None => TimeZone::system(),
+            Some(name) => TimeZone::get(name)
+                .or_else(|_| TimeZone::posix(name))
+                .with_context(|| format!("[adapters.bd] events_zone {name:?} is no time zone"))?,
+        };
+        let utc_from = bc
+            .events_utc_from
+            .as_deref()
+            .map(parse_instant)
+            .transpose()?;
+        // the export keeps only an issue's last close: only its last closed
+        // row is pinned by it
+        let mut last_close: HashMap<&str, Timestamp> = HashMap::new();
+        for row in rows.iter().filter(|r| r.event_type == "closed") {
+            if let Ok(raw) = parse_instant(&row.created_at) {
+                let last = last_close.entry(row.issue_id.as_str()).or_insert(raw);
+                *last = (*last).max(raw);
+            }
+        }
+        let mut pinned = Vec::new();
+        for row in rows {
+            let Ok(raw) = parse_instant(&row.created_at) else {
+                continue;
+            };
+            let (created, closed) = issues.get(&row.issue_id).copied().unwrap_or_default();
+            let own = match row.event_type.as_str() {
+                "created" => created,
+                "closed" if last_close.get(row.issue_id.as_str()) == Some(&raw) => closed,
+                _ => None,
+            };
+            // a zone's offset is whole quarter hours, to the second: anything
+            // else is an issue whose timestamps came from elsewhere (an import)
+            if let Some(d) = own.map(|own| own.duration_since(raw))
+                && d.abs() <= MAX_OFFSET
+                && d.as_secs() % 900 == 0
+                && d.subsec_nanos() == 0
+            {
+                pinned.push((raw, d));
+            }
+        }
+        pinned.sort();
+        Ok(Self {
+            zone,
+            utc_from,
+            pinned,
+        })
+    }
+
+    /// The instant a stored time means if it was local time in the zone.
+    fn local(&self, raw: Timestamp) -> Option<Timestamp> {
+        let civil = raw.to_zoned(TimeZone::UTC).datetime();
+        civil
+            .to_zoned(self.zone.clone())
+            .ok()
+            .map(|z| z.timestamp())
+    }
+
+    /// The instant a stored time means, or the span it lies in when the
+    /// correction cannot be told. Between two pinned rows that needed
+    /// different corrections, the change lies between their true instants:
+    /// a row read with the earlier correction must fall before the later
+    /// pin, and with the later one after the earlier pin. Where both
+    /// readings fit, the row is unresolved.
+    ///
+    /// # Errors
+    /// The span the instant lies in, when the correction cannot be told.
+    pub fn resolve(&self, raw: Timestamp) -> Result<Timestamp, (Timestamp, Timestamp)> {
+        if let Some(cutover) = self.utc_from {
+            return if raw >= cutover {
+                Ok(raw)
+            } else {
+                self.local(raw).ok_or((raw, raw + MAX_OFFSET))
+            };
+        }
+        let next = self.pinned.partition_point(|(pin, _)| *pin <= raw);
+        let before = next.checked_sub(1).map(|i| self.pinned[i]);
+        let after = self.pinned.get(next).copied();
+        let correction = match (before, after) {
+            (Some((_, early)), Some((_, late))) if early == late => Some(early),
+            (Some((_, only)), None) | (None, Some((_, only))) => Some(only),
+            (Some((pin_a, early)), Some((pin_b, late))) => {
+                let fits_early = raw + early < pin_b + late;
+                let fits_late = raw + late > pin_a + early;
+                match (fits_early, fits_late) {
+                    (true, false) => Some(early),
+                    (false, true) => Some(late),
+                    _ => {
+                        let (one, other) = (raw + early, raw + late);
+                        return Err((one.min(other), one.max(other)));
+                    }
+                }
+            }
+            (None, None) => None,
+        };
+        correction
+            .map(|d| raw + d)
+            .ok_or((raw - MAX_OFFSET, raw + MAX_OFFSET))
+    }
+}
+
+/// Claims, closes, reopens and assignments from bd's events, each at its
+/// resolved instant; a row whose instant cannot be resolved is a gap over
+/// the span it lies in. Also each issue's assignee at its creation, where a
+/// row keeps the issue as it was before (its earliest such row).
+pub fn history(
+    rows: &[Row],
+    clock: &Clock,
+    source: &str,
+    now: Timestamp,
+) -> (Vec<Event>, HashMap<String, String>) {
+    let source = format!("bd events ({source})");
+    let mut out = Vec::new();
+    let mut first_known: HashMap<String, (Timestamp, String)> = HashMap::new();
+    for row in rows {
+        let Ok(raw) = parse_instant(&row.created_at) else {
+            out.push(crate::event::gap(
+                now,
+                HISTORY,
+                source.clone(),
+                None,
+                format!("{source}: a row on {} has no time", row.issue_id),
+            ));
+            continue;
+        };
+        let kinds: Vec<Kind> = row_kinds(row);
+        if kinds.is_empty() && row.old_known != Some(1) {
+            continue;
+        }
+        // a row whose era cannot be told happened at one of two instants:
+        // its facts are kept at the later, and a gap says only when is unsure
+        let t = match clock.resolve(raw) {
+            Ok(t) => t,
+            Err((from, to)) => {
+                if !kinds.is_empty() {
+                    let covers: Vec<&str> = kinds.iter().map(Kind::as_str).collect();
+                    let mut gap = crate::event::gap_over(
+                        from,
+                        to,
+                        &covers,
+                        source.clone(),
+                        None,
+                        format!(
+                            "{source}: a {} row on {} stored at {raw} needs one of two time corrections, and no row near it says which",
+                            row.event_type, row.issue_id
+                        ),
+                    );
+                    gap.set_attr(attr::TIMING, true);
+                    out.push(gap);
+                }
+                to
+            }
+        };
+        if row.old_known == Some(1) {
+            let before = row.old_assignee.clone().unwrap_or_default();
+            let entry = first_known
+                .entry(row.issue_id.clone())
+                .or_insert((t, before.clone()));
+            if t < entry.0 {
+                *entry = (t, before);
+            }
+        }
+        for kind in kinds {
+            let mut e = Event::new(t, kind.clone(), source.clone());
+            e.subject = Some(row.issue_id.clone());
+            e.ids.goal = Some(row.issue_id.clone());
+            let new: Value = row
+                .new_value
+                .as_deref()
+                .filter(|v| v.starts_with('{'))
+                .and_then(|v| serde_json::from_str(v).ok())
+                .unwrap_or(Value::Null);
+            match kind {
+                Kind::Claim => {
+                    let who = new["assignee"]
+                        .as_str()
+                        .filter(|a| !a.is_empty())
+                        .map(str::to_owned)
+                        .or_else(|| row.actor.clone());
+                    e.actor.clone_from(&who);
+                    e.set_attr(attr::ASSIGNEE, who.unwrap_or_default());
+                }
+                Kind::Close => {
+                    e.actor.clone_from(&row.actor);
+                    e.set_attr(
+                        attr::CLOSE_REASON,
+                        row.new_value.clone().unwrap_or_default(),
+                    );
+                }
+                Kind::Assign => {
+                    e.set_attr(
+                        attr::ASSIGNEE,
+                        new["assignee"].as_str().unwrap_or_default().to_owned(),
+                    );
+                }
+                _ => e.actor.clone_from(&row.actor),
+            }
+            out.push(e);
+        }
+    }
+    // rows written in one second (a claim, then a reassignment) keep the
+    // order a tracker makes them in: a claim starts, an assignment follows
+    out.sort_by_key(|e| (e.t, rank(&e.kind)));
+    let at_creation = first_known
+        .into_iter()
+        .map(|(id, (_, a))| (id, a))
+        .collect();
+    (out, at_creation)
+}
+
+/// The order of facts written in one instant.
+fn rank(kind: &Kind) -> u8 {
+    match kind {
+        Kind::Claim => 0,
+        Kind::Assign => 1,
+        Kind::Reopen => 2,
+        Kind::Close => 3,
+        _ => 4,
+    }
+}
+
+/// What a row records, in andon's kinds.
+fn row_kinds(row: &Row) -> Vec<Kind> {
+    match row.event_type.as_str() {
+        "claimed" => vec![Kind::Claim],
+        "closed" => vec![Kind::Close],
+        "reopened" => vec![Kind::Reopen],
+        "updated" | "status_changed" => {
+            let assigns = row
+                .new_value
+                .as_deref()
+                .and_then(|v| serde_json::from_str::<Value>(v).ok())
+                .is_some_and(|v| v.get("assignee").is_some());
+            if assigns {
+                vec![Kind::Assign]
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// The events one exported issue yields. Pure; tested without bd.
@@ -101,7 +608,14 @@ pub fn issue_events(
         // an issue andon cannot name: its goal, claim and close are unknown
         out.push(crate::event::gap(
             config.capture()?,
-            &["create", "state:create", "state:claim", "state:close"],
+            &[
+                "create",
+                "state:create",
+                "state:claim",
+                "state:close",
+                "state:reopen",
+                "state:assign",
+            ],
             source.to_owned(),
             None,
             format!("{source}: an issue has no id"),
@@ -351,6 +865,9 @@ mod tests {
                 session: Some("critic.session".into()),
             }),
             since: None,
+            events: true,
+            events_zone: None,
+            events_utc_from: None,
         }
     }
 
@@ -393,5 +910,84 @@ mod tests {
         assert_eq!(verdict.actor, None);
         assert_eq!(verdict.attr_str(attr::REVIEWER), Some("andon-1a"));
         assert_eq!(events[6].attr_str(attr::CLOSE_REASON), Some("done"));
+    }
+
+    fn row(issue: &str, kind: &str, at: &str) -> Row {
+        Row {
+            issue_id: issue.into(),
+            event_type: kind.into(),
+            actor: None,
+            new_value: None,
+            created_at: at.into(),
+            old_assignee: None,
+            old_known: None,
+        }
+    }
+
+    fn t(s: &str) -> Timestamp {
+        parse_instant(s).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn each_row_takes_the_correction_of_the_pinned_rows_around_it() {
+        // a pinned 7h behind (local time), b pinned true, c pinned 4h behind
+        // (the machine moved zone), each by its creation
+        let rows = vec![
+            row("a", "created", "2026-10-01T03:00:00Z"),
+            row("b", "created", "2026-10-05T10:00:00Z"),
+            row("c", "created", "2026-10-08T06:00:00Z"),
+        ];
+        let issues: HashMap<String, (Option<Timestamp>, Option<Timestamp>)> = [
+            ("a", "2026-10-01T10:00:00Z"),
+            ("b", "2026-10-05T10:00:00Z"),
+            ("c", "2026-10-08T10:00:00Z"),
+        ]
+        .into_iter()
+        .map(|(id, c)| (id.to_owned(), (Some(t(c)), None)))
+        .collect();
+        let clock = Clock::new(&bc(), &rows, &issues).unwrap_or_else(|e| panic!("{e}"));
+        // before the first pin, and between pins that agree
+        assert_eq!(
+            clock.resolve(t("2026-09-30T00:00:00Z")),
+            Ok(t("2026-09-30T07:00:00Z"))
+        );
+        // between a 7h pin and a true one: read as local it falls before the
+        // later pin, read as UTC it does not fall after the earlier one
+        assert_eq!(
+            clock.resolve(t("2026-10-01T04:00:00Z")),
+            Ok(t("2026-10-01T11:00:00Z"))
+        );
+        // between those pins, a row that fits both readings is unresolved, and
+        // one read as local that would fall after the true pin is UTC
+        assert_eq!(
+            clock.resolve(t("2026-10-03T00:00:00Z")),
+            Err((t("2026-10-03T00:00:00Z"), t("2026-10-03T07:00:00Z")))
+        );
+        assert_eq!(
+            clock.resolve(t("2026-10-05T09:00:00Z")),
+            Ok(t("2026-10-05T09:00:00Z"))
+        );
+        // after the last pin, its correction
+        assert_eq!(
+            clock.resolve(t("2026-10-09T00:00:00Z")),
+            Ok(t("2026-10-09T04:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn only_an_issues_last_close_pins_its_row() {
+        // closed at 11:00 and again at 12:00: the export's closed_at is the
+        // second, and says nothing of the first
+        let rows = vec![
+            row("x", "closed", "2026-10-10T11:00:00Z"),
+            row("x", "closed", "2026-10-10T12:00:00Z"),
+        ];
+        let issues: HashMap<String, (Option<Timestamp>, Option<Timestamp>)> =
+            [("x".to_owned(), (None, Some(t("2026-10-10T12:00:00Z"))))].into();
+        let clock = Clock::new(&bc(), &rows, &issues).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            clock.pinned,
+            vec![(t("2026-10-10T12:00:00Z"), SignedDuration::ZERO)]
+        );
     }
 }

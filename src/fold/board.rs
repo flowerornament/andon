@@ -792,7 +792,10 @@ mod tests {
             event("2026-10-13T08:00:00Z", Kind::Claim, "x-1a", Some("x-old")),
             event("2026-10-13T09:00:00Z", Kind::Commit, "x-1a", Some("x-old")),
             event("2026-10-13T10:00:00Z", Kind::Claim, "x-1a", Some("x-new")),
-            covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
+            covered(
+                "1970-01-01T00:00:00Z",
+                &["create", "claim", "close", "reopen", "assign"],
+            ),
         ];
         let ledger = adapters::resolve(&config(), events);
         let b = board(&ledger, &config(), at("2026-10-13T12:00:00Z"));
@@ -829,7 +832,9 @@ mod tests {
             event("2026-10-13T08:00:00Z", Kind::Claim, "x-1a", Some("x-goal")),
             covered(
                 "1970-01-01T00:00:00Z",
-                &["create", "claim", "close", "land", "run"],
+                &[
+                    "create", "claim", "close", "reopen", "assign", "land", "run",
+                ],
             ),
         ];
         events.extend(live("x-1a", status, since, noon));
@@ -896,7 +901,10 @@ mod tests {
                 event("2026-10-10T00:00:00Z", Kind::Run, "x-1b", None),
                 event("2026-10-11T00:00:00Z", Kind::Run, "x-1b", None),
                 covered("2026-10-01T00:00:00Z", &["run"]),
-                covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
+                covered(
+                    "1970-01-01T00:00:00Z",
+                    &["create", "claim", "close", "reopen", "assign"],
+                ),
             ]
         };
         let mut events = base();
@@ -973,7 +981,14 @@ mod tests {
             comment("2026-10-13T10:30:00Z", "x-new"), // not the lead goal
             covered(
                 "1970-01-01T00:00:00Z",
-                &["create", "claim", "close", "other:comment"],
+                &[
+                    "create",
+                    "claim",
+                    "close",
+                    "reopen",
+                    "assign",
+                    "other:comment",
+                ],
             ),
         ];
         let ledger = adapters::resolve(&config(), events);
@@ -994,7 +1009,10 @@ mod tests {
             event("2026-10-10T00:00:00Z", Kind::Run, "x-1b", None),
             event("2026-10-11T00:00:00Z", Kind::Run, "x-1b", None),
             covered("2026-10-01T00:00:00Z", &["land", "run"]),
-            covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
+            covered(
+                "1970-01-01T00:00:00Z",
+                &["create", "claim", "close", "reopen", "assign"],
+            ),
         ];
         let ledger = adapters::resolve(&config, events);
         let b = board(&ledger, &config, at("2026-10-12T00:00:00Z"));
@@ -1019,7 +1037,10 @@ mod tests {
                 "Flower Ornament",
                 Some("x-shared"),
             ),
-            covered("1970-01-01T00:00:00Z", &["create", "claim", "close"]),
+            covered(
+                "1970-01-01T00:00:00Z",
+                &["create", "claim", "close", "reopen", "assign"],
+            ),
         ];
         let bd = Config::parse(
             "[seats.x-1a]\n[seats.x-1b]\n[adapters.bd]\ndir = \".\"\n",
@@ -1063,7 +1084,10 @@ mod tests {
             event("2026-10-13T08:00:00Z", Kind::Claim, "x-1a", Some("x-g")),
             event("2026-10-13T09:00:00Z", Kind::Run, "x-1a", None),
             event("2026-10-13T10:00:00Z", Kind::Run, "x-1a", None),
-            covered("1970-01-01T00:00:00Z", &["create", "claim", "close", "run"]),
+            covered(
+                "1970-01-01T00:00:00Z",
+                &["create", "claim", "close", "reopen", "assign", "run"],
+            ),
         ];
         let ledger = adapters::resolve(&runs, events);
         let b = board(&ledger, &runs, at("2026-10-13T12:00:00Z"));
@@ -1088,7 +1112,16 @@ mod tests {
             session,
             covered(
                 "1970-01-01T00:00:00Z",
-                &["create", "claim", "close", "session_active", "land", "run"],
+                &[
+                    "create",
+                    "claim",
+                    "close",
+                    "reopen",
+                    "assign",
+                    "session_active",
+                    "land",
+                    "run",
+                ],
             ),
         ];
         let flags = |text: &str| {
@@ -1132,7 +1165,7 @@ mod tests {
         ));
         events.push(covered(
             "1970-01-01T00:00:00Z",
-            &["create", "claim", "close"],
+            &["create", "claim", "close", "reopen", "assign"],
         ));
         let ledger = adapters::resolve(&bd, events);
         let b = board(&ledger, &bd, at("2026-10-13T12:00:00Z"));

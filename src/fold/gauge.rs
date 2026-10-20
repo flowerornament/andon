@@ -242,7 +242,7 @@ fn matches(pattern: &str, path: &str) -> bool {
 }
 
 /// The tracker's kinds: what a goal's state is read from.
-pub const TRACKER: &[&str] = &["create", "claim", "close"];
+pub const TRACKER: &[&str] = &["create", "claim", "close", "reopen", "assign"];
 
 /// Every gauge the board and the scorecard can print.
 #[must_use]

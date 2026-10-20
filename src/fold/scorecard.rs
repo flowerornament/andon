@@ -527,6 +527,9 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
     let mut total = Tally::default();
     let mut unattributed = Tally::default();
     let mut tracker = TrackerRaw::default();
+    // items closed, not closes: one reopened and closed again is one item
+    // closed (branching is items spawned per item closed)
+    let mut closed = std::collections::BTreeSet::new();
 
     for event in ledger.events().iter().filter(|e| window.contains(e.t)) {
         let seat_card = match &event.seat {
@@ -549,7 +552,9 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
                 }
             }
             Kind::Create => tracker.created += 1,
-            Kind::Close => tracker.closed += 1,
+            Kind::Close => {
+                closed.insert(event.ids.goal.as_ref().or(event.subject.as_ref()));
+            }
             _ => {}
         }
     }
@@ -581,6 +586,7 @@ pub fn scorecard(ledger: &Ledger, config: &Config, window: Window) -> Scorecard 
             .filter(|(_, i)| i.in_progress(config))
             .count();
     }
+    tracker.closed = closed.len();
     tracker.branching = ratio(tracker.created, tracker.closed);
 
     for card in seats.values_mut().chain([&mut total, &mut unattributed]) {

@@ -101,7 +101,7 @@ impl Resolver {
     /// belong to a seat).
     fn recipients(&self, events: &mut [Event], desk_seat: &HashMap<String, String>) {
         for event in events.iter_mut() {
-            if matches!(event.kind, Kind::Create | Kind::Claim)
+            if matches!(event.kind, Kind::Create | Kind::Claim | Kind::Assign)
                 && let Some(seat) = event.attr_str(attr::ASSIGNEE).and_then(|a| self.label(a))
             {
                 event.set_attr(attr::ASSIGNEE_SEAT, seat);

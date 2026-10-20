@@ -37,6 +37,11 @@ pub enum Kind {
     Claim,
     /// A tracker item was closed.
     Close,
+    /// A closed tracker item was reopened.
+    Reopen,
+    /// A tracker item's assignee was set or cleared (`assignee`, empty
+    /// when cleared), other than by a claim.
+    Assign,
     /// A span in which a session made tool calls.
     SessionActive,
     /// A session started a subagent.
@@ -72,6 +77,8 @@ impl Kind {
             Self::Create => "create",
             Self::Claim => "claim",
             Self::Close => "close",
+            Self::Reopen => "reopen",
+            Self::Assign => "assign",
             Self::SessionActive => "session_active",
             Self::Spawn => "spawn",
             Self::Presence => "presence",
@@ -97,6 +104,8 @@ impl Kind {
             "create" => Self::Create,
             "claim" => Self::Claim,
             "close" => Self::Close,
+            "reopen" => Self::Reopen,
+            "assign" => Self::Assign,
             "session_active" => Self::SessionActive,
             "spawn" => Self::Spawn,
             "presence" => Self::Presence,
@@ -340,6 +349,9 @@ pub mod attr {
         /// A live session's state as its harness records it (`busy`, `idle`;
         /// `live` where it records none).
         STATUS = "status", Text;
+        /// A gap only in when its facts happened: they are in the ledger at
+        /// the latest instant they could have been (`t_end`).
+        TIMING = "timing", Bool;
         /// A commit subject, an item or pull request title.
         TITLE = "title", Text;
         /// A message's recipients, verbatim.
@@ -487,6 +499,12 @@ impl Event {
         self.attrs.get(attr.key).and_then(Value::as_str)
     }
 
+    /// A true-or-false attribute, if present.
+    #[must_use]
+    pub fn attr_bool(&self, attr: Attr) -> Option<bool> {
+        self.attrs.get(attr.key).and_then(Value::as_bool)
+    }
+
     /// A string-list attribute; empty when absent.
     #[must_use]
     pub fn attr_strs(&self, attr: Attr) -> Vec<&str> {
@@ -560,6 +578,9 @@ impl Event {
     /// the declared keys. Before 0.3.0 one key, `reason`, carried four
     /// meanings; it is renamed by the kind of event that carried it.
     pub fn upgrade(&mut self) {
+        if self.kind == Kind::Coverage {
+            self.upgrade_covers();
+        }
         let Some(reason) = self.attrs.get("reason").cloned() else {
             return;
         };
@@ -575,6 +596,31 @@ impl Event {
         if !self.has_attr(to) && to.shape.admits(&reason) {
             self.attrs.remove("reason");
             self.attrs.insert(to.key.to_owned(), reason);
+        }
+    }
+
+    /// A source written before `reopen` and `assign` existed vouched for a
+    /// tracker's claims and closes as it saw them, with no reopen or
+    /// assignment it could have shown: its coverage of `claim` covers
+    /// `assign`, and of `close` covers `reopen` (also as `state:`).
+    fn upgrade_covers(&mut self) {
+        let covers: Vec<String> = self
+            .attr_strs(attr::COVERS)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let mut more = Vec::new();
+        for (had, implied) in [("claim", "assign"), ("close", "reopen")] {
+            for prefix in ["", "state:"] {
+                let (had, implied) = (format!("{prefix}{had}"), format!("{prefix}{implied}"));
+                if covers.contains(&had) && !covers.contains(&implied) {
+                    more.push(implied);
+                }
+            }
+        }
+        if !more.is_empty() {
+            let all: Vec<String> = covers.into_iter().chain(more).collect();
+            self.set_attr(attr::COVERS, all);
         }
     }
 }
@@ -654,5 +700,28 @@ mod tests {
         assert_eq!(gh.attr_str(attr::LOGS), Some("why"));
         assert_eq!(gh.undeclared(), Vec::<&str>::new());
         assert_eq!(read("message", "").undeclared(), vec!["reason"]);
+    }
+
+    #[test]
+    fn a_tracker_source_from_before_reopens_vouches_for_them() {
+        let mut old = coverage(
+            ALL_HISTORY,
+            None,
+            &["create", "claim", "state:close"],
+            "bd",
+            None,
+        );
+        old.upgrade();
+        assert_eq!(
+            old.attr_strs(attr::COVERS),
+            vec!["create", "claim", "state:close", "assign", "state:reopen"]
+        );
+        // a source that names them is left as it says
+        let mut new = coverage(ALL_HISTORY, None, &["claim", "close", "reopen"], "bd", None);
+        new.upgrade();
+        assert_eq!(
+            new.attr_strs(attr::COVERS),
+            vec!["claim", "close", "reopen", "assign"]
+        );
     }
 }
