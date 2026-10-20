@@ -4,6 +4,19 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+## v0.3.0 - 2026-10-19
+
+Supervision you can build on: every attribute and adapter is held to a
+stated contract, the board is one projection with typed gauges, and two
+new facts, who is running now and which unlanded files two seats share.
+
+- **Presence** (`.design/2026-10-19-overlap-and-presence.md` §2). With
+  `[adapters.presence]`, andon reads Claude Code's per-session files and
+  the process table: the board gains a `state` column (`busy 4m`, `idle
+  3h`, `—`) and flags `idle Nh holding G` past `[board] idle_minutes`
+  (default 60). It is current state, so `asof` an earlier instant shows
+  `?`. Without the adapter there is no column.
+
 - A session that moves between workspaces counts for each seat's own part:
   every activity span, spawn and edit is credited by the directory its own
   tool calls ran in, never by where the session mostly worked. A span
@@ -37,8 +50,9 @@ All notable changes to `andon` are documented in this file.
   even empty, keeps the founding schema; `andon init` declares it.
 - The `--json` output and the hook's line have a stated contract
   (`.design/2026-10-19-output-contract.md`). `tests/schema.rs` fails when
-  a field changes without the schema number moving. Board and scorecard
-  stay at schema 2, unchanged.
+  a field changes without the schema number moving. The board moves to
+  schema 3 (`state` and `overlaps` are new; every schema 2 field is
+  unchanged); the scorecard stays at schema 2.
 - Goals claimed by an identity that is no seat are one line per identity,
   with a count and the fix. `--json` still lists every goal.
 - `[project] land_recipe` (default `land`) names the land verb's gate
