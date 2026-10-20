@@ -43,6 +43,12 @@ pub enum Kind {
     Spawn,
     /// A harness session running now, with its status since it last changed.
     Presence,
+    /// A session's tool call wrote a file (`path`).
+    Edit,
+    /// A file a workspace has changed and not landed, as of its last
+    /// snapshot: `t` is when its newest unlanded commit touching the file
+    /// was written, `t_end` the capture.
+    Unlanded,
     /// What a source let andon see: a span it covers, or a gap it could not
     /// read (see `.design/2026-10-14-coverage.md`).
     Coverage,
@@ -69,6 +75,8 @@ impl Kind {
             Self::SessionActive => "session_active",
             Self::Spawn => "spawn",
             Self::Presence => "presence",
+            Self::Edit => "edit",
+            Self::Unlanded => "unlanded",
             Self::Coverage => "coverage",
             Self::Other(name) => name,
         }
@@ -92,6 +100,8 @@ impl Kind {
             "session_active" => Self::SessionActive,
             "spawn" => Self::Spawn,
             "presence" => Self::Presence,
+            "edit" => Self::Edit,
+            "unlanded" => Self::Unlanded,
             "coverage" => Self::Coverage,
             other if other.starts_with("other:") => Self::Other(other.to_owned()),
             other => Self::Other(format!("other:{other}")),
@@ -310,6 +320,9 @@ pub mod attr {
         MESSAGE_KIND = "message_kind", Text;
         /// Bytes of output a run produced.
         OUTPUT_BYTES = "output_bytes", Int;
+        /// The file an edit wrote or an unlanded change touches: relative to
+        /// the workspace root (an edit outside it keeps its absolute path).
+        PATH = "path", Text;
         /// A goal's Pool section, verbatim.
         POOL = "pool", Text;
         /// The id of the message this one answers.
@@ -322,6 +335,8 @@ pub mod attr {
         REVIEWER = "reviewer", Text;
         /// The runner's own reason for a run's ending, verbatim.
         RUN_REASON = "run_reason", Text;
+        /// When a workspace was last snapshotted: its newest operation.
+        SNAPSHOT = "snapshot", Text;
         /// A live session's state as its harness records it (`busy`, `idle`;
         /// `live` where it records none).
         STATUS = "status", Text;
@@ -331,6 +346,8 @@ pub mod attr {
         TO = "to", Texts;
         /// The seats a message's recipients resolve to (seat resolver).
         TO_SEATS = "to_seats", Texts;
+        /// The tool call that made an edit (`Edit`, `Write`, `apply_patch`, ...).
+        TOOL = "tool", Text;
         /// Trailers a project keeps on landings (`adapters.jj.trailers.keep`),
         /// by lowercased name.
         TRAILERS = "trailers", Map;

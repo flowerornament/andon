@@ -51,6 +51,9 @@ pub const USED_RUNS: Spec = Spec::new(Scope::Row, "goals.*.used", &["run"], Span
 /// Whether a session runs at the seat now, and in what status: harness
 /// session files, read as current state.
 pub const STATE: Spec = Spec::new(Scope::Row, "state", &["presence"], Span::State);
+/// Files the seat's workspace has changed and not landed that another
+/// seat's has too: every workspace's state at the instant.
+pub const OVERLAPS: Spec = Spec::new(Scope::Row, "overlaps", &["unlanded"], Span::State);
 pub const USED_WALL: Spec = Spec::new(Scope::Row, "goals.*.used", &[], Span::Origin)
     .over(&[&GOALS])
     .variant("wall-clock");
@@ -65,6 +68,7 @@ pub const SPECS: &[&Spec] = &[
     &RUNS_SINCE_LAND,
     &LAST_VERDICT,
     &FINDINGS,
+    &OVERLAPS,
     &USED,
     &USED_RUNS,
     &USED_WALL,
@@ -89,6 +93,10 @@ pub struct Board {
     /// The fix for goals claimed by a non-seat, for any goal (`<goal>`).
     #[serde(skip)]
     pub unseated_fix: String,
+    /// Whether a source read the workspaces at this instant: otherwise (no
+    /// jj, or a past instant) the text says nothing of overlaps.
+    #[serde(skip)]
+    pub overlaps_read: bool,
 }
 
 /// The flags a row can raise, and what each means: `board --help` reads
@@ -117,6 +125,10 @@ pub const FLAGS: &[(&str, &str)] = &[
     (
         "N runs since last landing",
         "runs piling up with nothing landed (not for hubs).",
+    ),
+    (
+        "overlaps S on N files",
+        "files the seat's workspace changed and has not landed that seat S's has too, as of each workspace's last jj snapshot (`?` where a workspace could not be read).",
     ),
 ];
 
@@ -158,9 +170,38 @@ pub struct Row {
     /// has no such column, not a column of unknowns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<Gauge<Option<Presence>>>,
+    /// Other seats whose unlanded edits share files with this seat's.
+    pub overlaps: Gauge<Vec<Overlap>>,
     /// Flags read only known gauges: a flag never speaks where the ledger
     /// could not look.
     pub flags: Vec<String>,
+}
+
+/// Another seat whose workspace changed files this seat's changed, neither
+/// landed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Overlap {
+    pub seat: String,
+    /// Every shared path, relative to the workspace root, sorted.
+    pub files: Vec<String>,
+    /// When the other workspace was last snapshotted: what it holds is as
+    /// of then.
+    pub snapshot: Option<Timestamp>,
+}
+
+/// The flag, and the hook's change, for an overlap: the seat, the count
+/// and the first paths.
+#[must_use]
+pub fn overlap(o: &Overlap) -> String {
+    let n = o.files.len();
+    let shown = match o.files.as_slice() {
+        [a] => a.clone(),
+        [a, b] => format!("{a}, {b}"),
+        [a, b, rest @ ..] => format!("{a}, {b}, +{}", rest.len()),
+        [] => String::new(),
+    };
+    let files = if n == 1 { "file" } else { "files" };
+    format!("overlaps {} on {n} {files} ({shown})", o.seat)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -318,6 +359,7 @@ pub fn board_of(p: &Projection<'_>, asof: Timestamp) -> Board {
         window_hours,
         goal_schema: config.goal_schema(),
         unseated_fix: crate::seat::identity_hint_any(config, "<goal>"),
+        overlaps_read: looked_at(p, "state:unlanded", asof),
         unseated: g.gauge(&UNSEATED, None, None, unseated),
         seats: rows,
     }
@@ -379,6 +421,7 @@ fn row(
     let first_claim = held.first().and_then(|x| x.claimed_at);
     let goals = g.gauge(&GOALS, s, None, held);
     let findings = g.over(&goals, &FINDINGS, s, first_claim.or(Some(g.to)), findings);
+    let overlaps = g.gauge(&OVERLAPS, None, None, overlaps(p, &seat, g.to));
     let mut row = Row {
         goals,
         landings: g.gauge(&LANDINGS, s, None, t.landings),
@@ -405,11 +448,71 @@ fn row(
             .coverage
             .reads("state:presence")
             .then(|| g.gauge(&STATE, s, None, presence(p.events(&seat), g.to))),
+        overlaps,
         flags: Vec::new(),
         seat,
     };
     row.flags = flags(&row, p, g, landings_from);
     row
+}
+
+/// The files `seat`'s workspace held unlanded at `at`, each with when its
+/// newest commit touching it was written.
+#[must_use]
+pub fn unlanded(
+    events: &[&Event],
+    at: Timestamp,
+) -> BTreeMap<String, (Timestamp, Option<Timestamp>)> {
+    events
+        .iter()
+        .filter(|e| e.kind == Kind::Unlanded && e.t <= at && e.t_end.is_some_and(|t| t >= at))
+        .filter_map(|e| {
+            let snapshot = e
+                .attr_str(crate::event::attr::SNAPSHOT)
+                .and_then(|s| crate::time::parse_instant(s).ok());
+            Some((
+                e.attr_str(crate::event::attr::PATH)?.to_owned(),
+                (e.t, snapshot),
+            ))
+        })
+        .collect()
+}
+
+/// The other seats whose workspaces held, unlanded at `at`, files `seat`'s
+/// held too.
+#[must_use]
+pub fn overlaps(p: &Projection<'_>, seat: &str, at: Timestamp) -> Vec<Overlap> {
+    let mine = unlanded(p.events(seat), at);
+    if mine.is_empty() {
+        return Vec::new();
+    }
+    p.seats()
+        .filter(|(other, _)| *other != seat)
+        .filter_map(|(other, events)| {
+            let theirs = unlanded(events, at);
+            let files: Vec<String> = theirs
+                .keys()
+                .filter(|f| mine.contains_key(*f))
+                .cloned()
+                .collect();
+            (!files.is_empty()).then(|| Overlap {
+                seat: other.to_owned(),
+                snapshot: theirs.values().find_map(|(_, s)| *s),
+                files,
+            })
+        })
+        .collect()
+}
+
+/// Whether a source looked at `kind` at the instant: a span or a gap of it
+/// holds `at`.
+fn looked_at(p: &Projection<'_>, kind: &str, at: Timestamp) -> bool {
+    p.ledger.events().iter().any(|e| {
+        e.kind == Kind::Coverage
+            && e.t <= at
+            && e.t_end.is_some_and(|t| t >= at)
+            && e.attr_strs(crate::event::attr::COVERS).contains(&kind)
+    })
 }
 
 /// Counts, last landing, last verdict.
@@ -627,6 +730,13 @@ fn flags(
         && p.refused_land(run)
     {
         flags.push("last land refused".to_owned());
+    }
+    // an overlap speaks where every workspace was read; `?` where one was
+    // looked at and could not be read
+    match row.overlaps.get() {
+        Some(overlaps) => flags.extend(overlaps.iter().map(overlap)),
+        None if looked_at(p, "state:unlanded", asof) => flags.push("overlaps ?".to_owned()),
+        None => {}
     }
     // the count speaks only where it is known (C2)
     if let Some(n) = row.runs_since_land.get()
@@ -1060,5 +1170,116 @@ mod tests {
             vec!["last land refused".to_owned()]
         );
         assert_eq!(flags("[seats.x-1a]\n"), Vec::<String>::new());
+    }
+
+    /// A file `seat`'s workspace held unlanded, read at 12:00.
+    fn unlanded(t: &str, seat: &str, path: &str) -> Event {
+        let mut e = event(t, Kind::Unlanded, seat, None);
+        e.t_end = Some(at("2026-10-13T12:00:00Z"));
+        e.set_attr(crate::event::attr::PATH, path);
+        e
+    }
+
+    fn workspaces_read(kinds: &[&str]) -> Vec<Event> {
+        let noon = at("2026-10-13T12:00:00Z");
+        vec![
+            covered("1970-01-01T00:00:00Z", kinds),
+            crate::event::coverage(noon, Some(noon), &["state:unlanded"], "jj", None),
+        ]
+    }
+
+    /// The board at `asof` over `events`, the workspaces read at 12:00.
+    fn overlap_board(events: Vec<Event>, asof: &str) -> Board {
+        let mut events = events;
+        events.extend(workspaces_read(&["land", "run"]));
+        let ledger = adapters::resolve(&config(), events);
+        board(&ledger, &config(), at(asof))
+    }
+
+    #[test]
+    fn two_seats_changing_one_file_are_flagged() {
+        let b = overlap_board(
+            vec![
+                unlanded("2026-10-13T09:00:00Z", "x-1a", "src/render.rs"),
+                unlanded("2026-10-13T09:05:00Z", "x-1a", "src/board.rs"),
+                unlanded("2026-10-13T10:00:00Z", "x-1b", "src/render.rs"),
+                unlanded("2026-10-13T10:05:00Z", "x-1b", "src/hook.rs"),
+            ],
+            "2026-10-13T12:00:00Z",
+        );
+        assert_eq!(
+            b.seats[0].flags,
+            vec!["overlaps x-1b on 1 file (src/render.rs)"]
+        );
+        assert_eq!(
+            b.seats[1].flags,
+            vec!["overlaps x-1a on 1 file (src/render.rs)"]
+        );
+    }
+
+    #[test]
+    fn the_flag_names_the_first_paths_and_json_lists_every_one() {
+        let files = ["a.rs", "b.rs", "c.rs", "d.rs"];
+        let mut events: Vec<Event> = files
+            .iter()
+            .flat_map(|f| {
+                [
+                    unlanded("2026-10-13T09:00:00Z", "x-1a", f),
+                    unlanded("2026-10-13T10:00:00Z", "x-1b", f),
+                ]
+            })
+            .collect();
+        for e in &mut events {
+            e.set_attr(crate::event::attr::SNAPSHOT, "2026-10-13T11:58:00Z");
+        }
+        let b = overlap_board(events, "2026-10-13T12:00:00Z");
+        assert_eq!(
+            b.seats[0].flags,
+            vec!["overlaps x-1b on 4 files (a.rs, b.rs, +2)"]
+        );
+        let json = serde_json::to_value(&b.seats[0].overlaps).unwrap_or_default();
+        assert_eq!(
+            json,
+            serde_json::json!([{"seat": "x-1b", "files": files, "snapshot": "2026-10-13T11:58:00Z"}])
+        );
+    }
+
+    #[test]
+    fn an_unreadable_workspace_makes_the_overlap_unknown() {
+        let noon = at("2026-10-13T12:00:00Z");
+        let b = overlap_board(
+            vec![
+                unlanded("2026-10-13T09:00:00Z", "x-1a", "src/render.rs"),
+                crate::event::gap_at(
+                    noon,
+                    &["state:unlanded"],
+                    "jj",
+                    None,
+                    "workspace x-1b: unreadable",
+                ),
+            ],
+            "2026-10-13T12:00:00Z",
+        );
+        assert!(!b.seats[0].overlaps.is_known());
+        assert_eq!(b.seats[0].flags, vec!["overlaps ?"]);
+        assert!(crate::render::board(&b).contains("workspace x-1b: unreadable"));
+    }
+
+    #[test]
+    fn a_past_instant_or_no_jj_says_nothing_of_overlaps() {
+        let events = vec![
+            unlanded("2026-10-13T09:00:00Z", "x-1a", "src/render.rs"),
+            unlanded("2026-10-13T09:00:00Z", "x-1b", "src/render.rs"),
+        ];
+        // the workspaces were read at noon only: at 11:00 the overlap is
+        // unknown, and the text is as it was before overlaps were read
+        let b = overlap_board(events, "2026-10-13T11:00:00Z");
+        assert!(!b.seats[0].overlaps.is_known());
+        assert_eq!(b.seats[0].flags, Vec::<String>::new());
+        assert!(!crate::render::board(&b).contains("overlaps"));
+        let ledger = adapters::resolve(&config(), vec![covered("1970-01-01T00:00:00Z", &["land"])]);
+        let b = board(&ledger, &config(), at("2026-10-13T12:00:00Z"));
+        assert!(!b.seats[0].overlaps.is_known());
+        assert!(!crate::render::board(&b).contains("overlaps"));
     }
 }

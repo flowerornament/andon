@@ -631,13 +631,13 @@ pub fn board(board: &Board) -> String {
     ));
     out.push_str(&unseated(board));
     let mut entries = row_unknowns(&board.seats, |r| r.seat.as_str());
-    // a column the board does not show has no `?` to explain
-    if !board.goal_schema {
-        entries.retain(|(key, _)| {
-            key.split_once(' ')
-                .is_none_or(|(_, path)| !path.starts_with("goals"))
-        });
-    }
+    // a column the board does not show has no `?` to explain, nor does a
+    // flag no source could raise
+    let hidden = |path: &str| {
+        (!board.goal_schema && path.starts_with("goals"))
+            || (!board.overlaps_read && path.starts_with("overlaps"))
+    };
+    entries.retain(|(key, _)| key.split_once(' ').is_none_or(|(_, path)| !hidden(path)));
     if !entries.is_empty() {
         out.push('\n');
         out.push_str(&reasons(&entries));

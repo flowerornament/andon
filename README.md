@@ -49,7 +49,7 @@ Three contracts make it project-independent:
 
 ## Surfaces
 
-- `andon board [--seat S]` — goal, budget spent of allowed, landings, runs and pass rate, last verdict, findings on the lead goal since its claim, flags (over budget, more goals than WIP allows, no landing in N days, last land refused; a hub in `[messages] hubs` gets no landing flags). Only `[goal] types` (default feature, bug, task) count toward WIP. A goal claimed by an identity that is no seat is named beneath the table.
+- `andon board [--seat S]` — goal, budget spent of allowed, landings, runs and pass rate, last verdict, findings on the lead goal since its claim, flags (over budget, more goals than WIP allows, no landing in N days, last land refused, files another seat's workspace also holds unlanded, read from jj; a hub in `[messages] hubs` gets no landing flags). Only `[goal] types` (default feature, bug, task) count toward WIP. A goal claimed by an identity that is no seat is named beneath the table.
 - `andon scorecard <day>` — the four gauges per seat.
 - `andon asof <date>` — the board as it stood, replayed from the ledger.
 - `andon hook` — reads the harness hook JSON on stdin, prints the seat's row. Claude Code and Codex.

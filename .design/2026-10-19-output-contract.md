@@ -121,3 +121,15 @@ the seat, else `status` (`busy`, `idle`, or `live` where the harness records
 none), `since` (when that status began) and `sessions` (how many run). The
 text gains a `state` column, under the same condition. The flag
 `idle Nh holding G` is new. Every schema 2 field is unchanged.
+
+## Amendment: board schema 3, overlaps (2026-10-20, andon-tgv)
+
+Schema 3 also holds each row's `overlaps[]`: every other seat whose
+workspace holds unlanded changes to files this seat's does. Each entry has
+`seat`, `files` (every shared path, sorted) and `snapshot` (when that
+workspace was last snapshotted, or `null`). It is a current-state gauge
+over jj's workspaces, so it is `{"unknown": ...}` at an instant they were
+not read, or where one could not be read. `flags[]` gains `overlaps <seat>
+on N files (...)`, and `overlaps ?` where a workspace was looked at and
+could not be read. The columns are unchanged. Schema 3 is unreleased, so
+this joins it rather than moving the number again.

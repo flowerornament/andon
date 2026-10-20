@@ -11,7 +11,10 @@
 //!   its committer time; the actor is the seat trailer, else the workspace
 //!   trailer, else the operation's workspace;
 //! - `commit` for each commit, timed by author time (the change's start);
-//! - `other:desk_create` and `other:desk_remove` for workspace operations.
+//! - `other:desk_create` and `other:desk_remove` for workspace operations;
+//! - `unlanded` for each file a workspace has changed since it forked from
+//!   the trunk, as of the workspace's last snapshot (current state: the
+//!   read sees each workspace as jj last recorded it, never snapshotting).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -102,14 +105,128 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
     )?;
     // what this read covers: the trunk's landings and change starts from
     // `since` (or all history) to now, the instant of capture
+    let now = config.capture()?;
+    out.extend(workspaces(&dir, &jc.trunk, &ops, &source, now)?);
     out.push(crate::event::coverage(
         since.unwrap_or(crate::event::ALL_HISTORY),
-        Some(config.capture()?),
+        Some(now),
         &["land", "commit", "other:desk_create", "other:desk_remove"],
         source,
         None,
     ));
     Ok(out)
+}
+
+/// Each workspace's unlanded files at `now`: the net change from where it
+/// forked from the trunk to its working copy, each file timed by the newest
+/// commit in that range touching it. Covered at the instant for every seat;
+/// a workspace that cannot be read is a gap there, since an overlap needs
+/// every workspace.
+fn workspaces(
+    repo: &Repo<'_>,
+    trunk: &str,
+    ops: &[JjOp],
+    source: &str,
+    now: Timestamp,
+) -> Result<Vec<Event>> {
+    let listed = jj(repo, &["workspace", "list", "-T", "name ++ \"\\n\""])?;
+    let mut out = Vec::new();
+    for name in listed.lines().map(str::trim).filter(|n| !n.is_empty()) {
+        // ops are newest first: the first naming the workspace is its last
+        // snapshot (or any command run there)
+        let snapshot = ops
+            .iter()
+            .find(|op| op.workspace_name.as_deref() == Some(name))
+            .map(|op| op.time.start.clone());
+        match unlanded(repo, trunk, name) {
+            Ok(files) => {
+                for (path, changed) in files {
+                    let mut e = Event::new(changed.unwrap_or(now).min(now), Kind::Unlanded, source);
+                    e.t_end = Some(now);
+                    e.actor = Some(name.to_owned());
+                    e.set_attr(attr::PATH, path);
+                    e.set_attr(attr::WORKSPACE, name);
+                    if let Some(s) = &snapshot {
+                        e.set_attr(attr::SNAPSHOT, s.clone());
+                    }
+                    out.push(e);
+                }
+            }
+            Err(why) => out.push(crate::event::gap_at(
+                now,
+                &["state:unlanded"],
+                source,
+                None,
+                format!("workspace {name}: {why:#}"),
+            )),
+        }
+    }
+    out.push(crate::event::coverage(
+        now,
+        Some(now),
+        &["state:unlanded"],
+        source,
+        None,
+    ));
+    Ok(out)
+}
+
+/// The files `workspace` changed since it forked from `trunk`, net (a
+/// change undone later is not one), with the newest commit time touching
+/// each.
+fn unlanded(
+    repo: &Repo<'_>,
+    trunk: &str,
+    workspace: &str,
+) -> Result<Vec<(String, Option<Timestamp>)>> {
+    let fork = format!("fork_point({trunk} | {workspace}@)");
+    let net = jj(
+        repo,
+        &[
+            "diff",
+            "--from",
+            &fork,
+            "--to",
+            &format!("{workspace}@"),
+            "-T",
+            "json(path) ++ \"\\n\"",
+        ],
+    )?;
+    let commits = jj(
+        repo,
+        &[
+            "log",
+            "--no-graph",
+            "-r",
+            &format!("{fork}..{workspace}@"),
+            "-T",
+            "json(committer.timestamp().utc().format(\"%Y-%m-%dT%H:%M:%SZ\")) ++ \"\\t\" ++ json(self.diff().files().map(|f| f.path())) ++ \"\\n\"",
+        ],
+    )?;
+    let mut changed: HashMap<String, Timestamp> = HashMap::new();
+    for line in commits.lines().filter(|l| !l.trim().is_empty()) {
+        let (t, files) = line
+            .split_once('\t')
+            .context("jj log printed something other than a time and files")?;
+        let t: String = serde_json::from_str(t).context("jj log printed no commit time")?;
+        let t = parse_instant(&t)?;
+        let files: Vec<String> =
+            serde_json::from_str(files).context("jj log printed no file list")?;
+        for f in files {
+            let at = changed.entry(f).or_insert(t);
+            *at = (*at).max(t);
+        }
+    }
+    // paths as the repository names them, never relative to where andon runs
+    net.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let path: String =
+                serde_json::from_str(l).context("jj diff printed something other than a path")?;
+            let at = changed.get(&path).copied();
+            Ok((path, at))
+        })
+        .collect()
 }
 
 /// One commit, for `check commit`: its id, title and the seat its trailers

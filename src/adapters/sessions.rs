@@ -6,8 +6,10 @@
 //! activity spans: calls closer than `gap_minutes` belong to one span.
 //!
 //! Emits `session_active` spans (the actor is the working directory's name,
-//! so a workspace is a seat) and `spawn` for each subagent started. A
-//! subagent's spans carry its root session in `ids.session` and its own id in
+//! so a workspace is a seat), `spawn` for each subagent started, and `edit`
+//! for each file an edit tool call wrote (Claude Code's `Edit`, `Write`,
+//! `MultiEdit` and `NotebookEdit`, Codex's `apply_patch`). A subagent's
+//! events carry its root session in `ids.session` and its own id in
 //! `ids.critic_session`, so its effort counts for the seat that started it.
 
 use std::collections::BTreeMap;
@@ -36,8 +38,13 @@ pub struct Transcript {
     pub cwd: BTreeMap<String, usize>,
     pub calls: Vec<Timestamp>,
     pub spawns: Vec<(Timestamp, String)>,
+    /// Files edit tool calls wrote: when, the tool, the path as written.
+    pub edits: Vec<(Timestamp, String, String)>,
     pub source: String,
 }
+
+/// The kinds a transcript yields.
+const KINDS: &[&str] = &["session_active", "spawn", "edit"];
 
 /// What to read: transcripts from `since` on, and with `root`, only those
 /// whose working directory is under it (the hook reads one seat's).
@@ -74,12 +81,11 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
     // the seat filter applies to the directory a session is attributed to
     // (where it mostly worked), never to where it happened to start, so a
     // scoped read keeps exactly the sessions the full read gives the seat
-    let keep_cwd = |cwd: &str| {
-        configured(cwd)
-            && scope
-                .root
-                .as_deref()
-                .is_none_or(|r| cwd == r || cwd.starts_with(&format!("{r}/")))
+    let in_root = |cwd: &str| {
+        scope
+            .root
+            .as_deref()
+            .is_none_or(|r| cwd == r || cwd.starts_with(&format!("{r}/")))
     };
     let mut files: Vec<(PathBuf, bool)> = Vec::new();
     let mut reads = Reads::default();
@@ -132,7 +138,7 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
     let gap = SignedDuration::from_mins(i64::from(sc.gap_minutes));
     // a directory that could not be listed held transcripts of unknown
     // seats: a gap for every seat, as an unreadable transcript is
-    let mut events = reads.gaps_since(0, now, &["session_active", "spawn"], None);
+    let mut events = reads.gaps_since(0, now, KINDS, None);
     for (file, got) in read {
         let t = match got {
             Ok(Some(t)) => t,
@@ -140,41 +146,42 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
             // an unreadable transcript is a gap: whose sessions it held is
             // unknown, so every seat's effort is unknown while it stands
             Err(why) => {
-                let reason = format!("{}: {why}", file.display());
-                let kinds = &["session_active", "spawn"];
-                let source = file.display().to_string();
-                // its turns were all written before its last write: the gap
-                // stands over spans up to then, not over every window after
-                events.push(match last_write(&file) {
-                    Some(t) => crate::event::gap_over(
-                        crate::event::ALL_HISTORY,
-                        t,
-                        kinds,
-                        source,
-                        None,
-                        reason,
-                    ),
-                    None => crate::event::gap(now, kinds, source, None, reason),
-                });
+                events.push(unreadable(&file, &why, now));
                 continue;
             }
         };
         let Some(cwd) = most(&t.cwd) else { continue };
-        if !keep_cwd(&cwd) {
+        if !configured(&cwd) {
             continue;
         }
-        events.extend(spans(&t, &cwd, gap, since));
+        if in_root(&cwd) {
+            events.extend(spans(&t, &cwd, gap, since));
+        }
     }
     // sessions are covered from `since` (or all history) to now; a scoped
     // read covers only its seat
     events.push(crate::event::coverage(
         since.unwrap_or(crate::event::ALL_HISTORY),
         Some(now),
-        &["session_active", "spawn"],
+        KINDS,
         "transcripts",
         scope.seat.as_deref(),
     ));
     Ok(events)
+}
+
+/// The gap an unreadable transcript leaves. Its turns were all written
+/// before its last write, so the gap stands over spans up to then, not over
+/// every window after.
+fn unreadable(file: &Path, why: &str, now: Timestamp) -> Event {
+    let reason = format!("{}: {why}", file.display());
+    let source = file.display().to_string();
+    match last_write(file) {
+        Some(t) => {
+            crate::event::gap_over(crate::event::ALL_HISTORY, t, KINDS, source, None, reason)
+        }
+        None => crate::event::gap(now, KINDS, source, None, reason),
+    }
 }
 
 /// When a file was last written, if that can be read.
@@ -367,6 +374,14 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
                 let what = c["input"]["description"].as_str().unwrap_or_default();
                 t.spawns.push((ts, what.to_owned()));
             }
+            let path = match name {
+                "Edit" | "Write" | "MultiEdit" => c["input"]["file_path"].as_str(),
+                "NotebookEdit" => c["input"]["notebook_path"].as_str(),
+                _ => None,
+            };
+            if let Some(path) = path.filter(|p| !p.is_empty()) {
+                t.edits.push((ts, name.to_owned(), path.to_owned()));
+            }
         }
     }
     Ok(t)
@@ -445,12 +460,73 @@ pub fn codex(
             if name.contains("spawn") {
                 t.spawns.push((ts, name.to_owned()));
             }
+            if name == "apply_patch" {
+                for path in patch_paths(payload) {
+                    t.edits.push((ts, name.to_owned(), path));
+                }
+            }
         }
     }
     Ok(Some(t))
 }
 
-/// Activity spans and spawns for one transcript.
+/// The files an `apply_patch` call names: its patch is the custom tool
+/// call's `input`, or a string in the function call's JSON `arguments`.
+fn patch_paths(payload: &Value) -> Vec<String> {
+    let mut texts = Vec::new();
+    if let Some(input) = payload["input"].as_str() {
+        texts.push(input.to_owned());
+    }
+    if let Some(args) = payload["arguments"].as_str()
+        && let Ok(v) = serde_json::from_str::<Value>(args)
+    {
+        strings(&v, &mut texts);
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for text in texts {
+        for line in text.lines() {
+            let path = [
+                "*** Update File: ",
+                "*** Add File: ",
+                "*** Delete File: ",
+                "*** Move to: ",
+            ]
+            .iter()
+            .find_map(|p| line.strip_prefix(p));
+            if let Some(path) = path.map(str::trim).filter(|p| !p.is_empty())
+                && !paths.iter().any(|p| p == path)
+            {
+                paths.push(path.to_owned());
+            }
+        }
+    }
+    paths
+}
+
+fn strings(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::String(s) => out.push(s.clone()),
+        Value::Array(items) => items.iter().for_each(|x| strings(x, out)),
+        Value::Object(map) => map.values().for_each(|x| strings(x, out)),
+        _ => {}
+    }
+}
+
+/// An edited path as the board matches it: relative to the workspace root
+/// `cwd` when under it (so one file in two workspaces is one path), as
+/// written when relative (to the turn's directory), else absolute.
+#[must_use]
+pub fn workspace_path(path: &str, cwd: &str) -> String {
+    let p = Path::new(path);
+    match p.strip_prefix(cwd) {
+        Ok(rel) if p.is_absolute() && !rel.as_os_str().is_empty() => {
+            rel.to_string_lossy().into_owned()
+        }
+        _ => path.to_owned(),
+    }
+}
+
+/// Activity spans, spawns and edits for one transcript.
 #[must_use]
 pub fn spans(
     t: &Transcript,
@@ -508,6 +584,14 @@ pub fn spans(
         if since.is_none_or(|s| *ts >= s) {
             let mut e = make(*ts, Kind::Spawn);
             e.set_attr(attr::DESCRIPTION, what.clone());
+            events.push(e);
+        }
+    }
+    for (ts, tool, path) in &t.edits {
+        if since.is_none_or(|s| *ts >= s) {
+            let mut e = make(*ts, Kind::Edit);
+            e.set_attr(attr::TOOL, tool.clone());
+            e.set_attr(attr::PATH, workspace_path(path, cwd));
             events.push(e);
         }
     }
@@ -584,5 +668,77 @@ mod tests {
         assert_eq!(t.calls.len(), 2);
         assert_eq!(t.spawns.len(), 1);
         assert_eq!(most(&t.cwd).as_deref(), Some("/code/andon-1b"));
+    }
+
+    #[test]
+    fn edit_tool_calls_become_edits_relative_to_the_workspace() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("s.jsonl");
+        let call = |name: &str, input: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-10-13T10:00:05Z","sessionId":"s1","cwd":"/code/x-1b","message":{{"content":[{{"type":"tool_use","name":"{name}","input":{input}}}]}}}}"#
+            )
+        };
+        let lines = [
+            call("Edit", r#"{"file_path":"/code/x-1b/src/a.rs"}"#),
+            call("Write", r#"{"file_path":"/code/x-1b/b.md"}"#),
+            call("MultiEdit", r#"{"file_path":"/code/x-1/src/c.rs"}"#),
+            call("NotebookEdit", r#"{"notebook_path":"/code/x-1b/n.ipynb"}"#),
+            call("Read", r#"{"file_path":"/code/x-1b/src/r.rs"}"#),
+        ];
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap_or_else(|e| panic!("{e}"));
+        let t = claude(&file);
+        let events = spans(&t, "/code/x-1b", SignedDuration::from_mins(10), None);
+        let edits: Vec<(&str, &str)> = events
+            .iter()
+            .filter(|e| e.kind == Kind::Edit)
+            .map(|e| {
+                (
+                    e.attr_str(attr::TOOL).unwrap_or_default(),
+                    e.attr_str(attr::PATH).unwrap_or_default(),
+                )
+            })
+            .collect();
+        // x-1 is a sibling, not the workspace: its path stays absolute
+        assert_eq!(
+            edits,
+            vec![
+                ("Edit", "src/a.rs"),
+                ("Write", "b.md"),
+                ("MultiEdit", "/code/x-1/src/c.rs"),
+                ("NotebookEdit", "n.ipynb"),
+            ]
+        );
+        assert!(
+            events
+                .iter()
+                .filter(|e| e.kind == Kind::Edit)
+                .all(|e| e.actor.as_deref() == Some("x-1b"))
+        );
+    }
+
+    #[test]
+    fn an_apply_patch_names_each_file_it_touches() {
+        let patch = "*** Begin Patch\n*** Update File: /code/x-1a/src/a.rs\n@@\n-x\n+y\n*** Add File: docs/new.md\n+hi\n*** Delete File: /code/x-1a/old.rs\n*** Update File: /code/x-1a/src/b.rs\n*** Move to: /code/x-1a/src/c.rs\n*** End Patch\n";
+        let custom =
+            serde_json::json!({"type": "custom_tool_call", "name": "apply_patch", "input": patch});
+        let args = serde_json::json!({"input": patch}).to_string();
+        let function =
+            serde_json::json!({"type": "function_call", "name": "apply_patch", "arguments": args});
+        let want = vec![
+            "/code/x-1a/src/a.rs",
+            "docs/new.md",
+            "/code/x-1a/old.rs",
+            "/code/x-1a/src/b.rs",
+            "/code/x-1a/src/c.rs",
+        ];
+        assert_eq!(patch_paths(&custom), want);
+        assert_eq!(patch_paths(&function), want);
+        assert_eq!(
+            workspace_path("/code/x-1a/src/a.rs", "/code/x-1a"),
+            "src/a.rs"
+        );
+        assert_eq!(workspace_path("docs/new.md", "/code/x-1a"), "docs/new.md");
+        assert_eq!(workspace_path("/code/x-1a", "/code/x-1a"), "/code/x-1a");
     }
 }

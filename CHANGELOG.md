@@ -4,6 +4,15 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- **Overlapping unlanded edits** (`.design/2026-10-19-overlap-and-presence.md`
+  §1). The jj adapter reads each workspace's unlanded files: the net change
+  since it forked from the trunk, as of its last snapshot, whatever tool
+  wrote them. The board flags `overlaps S on N files (...)` where two
+  seats' workspaces hold the same file, and `--json` lists every shared
+  path under `seats[].overlaps` (board schema 3). The hook says so when a
+  shared file changed since the last turn. The sessions adapter also emits
+  `edit` for each file an edit tool call wrote.
+
 - Live acceptance is pinned to a kept ledger: each suite in
   `~/.config/andon/live.toml` names one (`ledger = FILE`, from `andon
   ledger`), and `cargo test` folds it, so only a change in andon's folds

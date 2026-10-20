@@ -16,7 +16,7 @@ use andon::time::{Window, parse_instant};
 use serde_json::Value;
 
 /// A ledger that fills every field: each kind, each optional value.
-const LEDGER: &str = r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":"pass","source":"test","attrs":{"covers":["land","commit","run","gate_run","verdict","message","create","claim","close","session_active","other:comment"]}}
+const LEDGER: &str = r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":"pass","source":"test","attrs":{"covers":["land","commit","run","gate_run","verdict","message","create","claim","close","session_active","unlanded","other:comment"]}}
 {"t":"2026-10-13T07:00:00Z","kind":"create","actor":"x-1a","subject":"x-abc","ids":{"goal":"x-abc"},"source":"t","attrs":{"budget":"4 agent-hours","item_type":"task","title":"t"}}
 {"t":"2026-10-13T07:30:00Z","kind":"claim","actor":"x-1a","subject":"x-abc","ids":{"goal":"x-abc"},"source":"t"}
 {"t":"2026-10-13T07:35:00Z","kind":"create","actor":"Shared","subject":"x-def","ids":{"goal":"x-def"},"source":"t","attrs":{"item_type":"task"}}
@@ -33,6 +33,8 @@ const LEDGER: &str = r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":
 {"t":"2026-10-13T10:00:00Z","kind":"close","subject":"x-old","ids":{"goal":"x-old"},"source":"t"}
 {"t":"2026-10-13T12:00:00Z","t_end":"2026-10-13T12:00:00Z","kind":"coverage","outcome":"pass","source":"sessions","attrs":{"covers":["state:presence"]}}
 {"t":"2026-10-13T11:00:00Z","t_end":"2026-10-13T12:00:00Z","kind":"presence","actor":"x-1a","ids":{"session":"s1"},"source":"t","attrs":{"status":"idle","cwd":"/x-1a"}}
+{"t":"2026-10-13T10:30:00Z","t_end":"2026-10-13T12:00:00Z","kind":"unlanded","actor":"x-1a","source":"t","attrs":{"path":"src/a.rs","workspace":"x-1a"}}
+{"t":"2026-10-13T10:40:00Z","t_end":"2026-10-13T12:00:00Z","kind":"unlanded","actor":"x-1b","source":"t","attrs":{"path":"src/a.rs","workspace":"x-1b","snapshot":"2026-10-13T11:59:00Z"}}
 "#;
 
 /// Objects keyed by data (a seat, a repository), not by field.
@@ -132,8 +134,8 @@ const BOARD_V2: &[&str] = &[
     "window_hours",
 ];
 
-/// The board's fields under schema 3: schema 2's, and each row's `state`
-/// where live sessions were read (andon-3im).
+/// The board's fields under schema 3: schema 2's, each row's `state` where
+/// live sessions were read (andon-3im), and its `overlaps` (andon-tgv).
 const BOARD_V3: &[&str] = &[
     "asof",
     "schema",
@@ -156,6 +158,11 @@ const BOARD_V3: &[&str] = &[
     "seats.*.last_verdict.outcome",
     "seats.*.last_verdict.subject",
     "seats.*.last_verdict.t",
+    "seats.*.overlaps",
+    "seats.*.overlaps.*",
+    "seats.*.overlaps.*.files",
+    "seats.*.overlaps.*.seat",
+    "seats.*.overlaps.*.snapshot",
     "seats.*.runs",
     "seats.*.runs_pass",
     "seats.*.runs_since_land",

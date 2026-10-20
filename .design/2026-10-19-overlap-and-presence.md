@@ -82,3 +82,33 @@ Flopwire's team server, transcript search and messaging belong to peat and
 hail, or to neither. Its delivery facts (undelivered, session ended)
 become andon inputs once hail records them; the hail adapter reads them
 then.
+
+## Amendment: overlaps as built (2026-10-20, andon-tgv)
+
+The flag is driven by jj, not by transcripts. On the live andon config,
+neither seat's edits showed up in its transcripts. Both seats edit through
+the shell, and a coordinator's session was attributed to the colocated
+checkout, so its probe edit of `andon-1a/CHANGELOG.md` stayed absolute and
+never matched. jj already records the fact whatever tool wrote the file.
+
+- **Source.** The jj adapter emits `unlanded` for each file in a
+  workspace's net change from `fork_point(trunk | <ws>@)` to `<ws>@`, with
+  the workspace's seat. A change undone is not in the net change. A
+  landing empties the landed side. Paths are the repository's own. Each
+  fact's `t` is when the newest commit in that range touching the file was
+  written, `t_end` is the capture, and `snapshot` is the workspace's newest
+  operation. The read uses `--ignore-working-copy`, so each workspace is as
+  of its last snapshot: minutes old wherever agents run jj.
+- **Current state.** Every workspace is covered as `state:unlanded` at the
+  capture instant. An unreadable workspace is a gap there for every seat,
+  since an overlap needs them all. `asof` an earlier instant is unknown,
+  and the text then says nothing of overlaps, as it does without jj.
+- **The hook.** The workspaces are read only at the capture. An overlap is
+  news when a shared file changed on either side after the last turn:
+  before then, both sides already held it. No narrow read of other seats'
+  transcripts is needed.
+- **Transcripts.** The sessions adapter still emits `edit` for edit tool
+  calls, relative to the session's workspace root, for per-session
+  attribution. No gauge reads it yet.
+- **git.** The analogue is each worktree's `git diff --name-only
+  <trunk>...HEAD` plus its uncommitted changes. It is not built.

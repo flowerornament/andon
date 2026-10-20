@@ -52,6 +52,7 @@ const KINDS: &[&str] = &[
     "close",
     "other:comment",
     "session_active",
+    "unlanded",
 ];
 
 /// What is wrong with one kind's source.
@@ -119,9 +120,21 @@ fn day(fault: Option<(&str, Fault)>, drop: Option<&str>) -> Ledger {
     let mut span = fact("2026-10-13T10:00:00Z", Kind::SessionActive, None);
     span.t_end = Some(at("2026-10-13T11:00:00Z"));
     span.ids.session = Some("s1".into());
+    // both seats' workspaces hold one file unlanded: an overlap
+    let edit = |t: &str, seat: &str| {
+        let mut e = fact(t, Kind::Unlanded, None);
+        e.t_end = Some(at(NOON));
+        e.actor = Some(seat.into());
+        e.set_attr(attr::PATH, "src/a.rs");
+        e
+    };
+    let (edit_a, edit_b) = (
+        edit("2026-10-13T12:30:00Z", "x-1a"),
+        edit("2026-10-13T13:30:00Z", "x-1b"),
+    );
     let mut sources = Vec::new();
     for kind in KINDS.iter().copied() {
-        let tracker = ["create", "claim", "close"].contains(&kind);
+        let tracker = ["create", "claim", "close", "unlanded"].contains(&kind);
         let from = if tracker {
             ALL_HISTORY
         } else {
@@ -149,7 +162,7 @@ fn day(fault: Option<(&str, Fault)>, drop: Option<&str>) -> Ledger {
         &config(),
         vec![
             land, start, run, gate, verdict, message, create, claim, comment, span, land_b,
-            verdict_b,
+            verdict_b, edit_a, edit_b,
         ]
         .into_iter()
         .filter(|e| drop.is_none_or(|k| e.kind.as_str() != k))

@@ -4,8 +4,9 @@
 //!
 //! - `SessionStart`: the seat's row.
 //! - `UserPromptSubmit`: what changed for the seat since its last turn
-//!   (a verdict, a claim or close, a landing, a refused land, budget spent),
-//!   then the row. Silent when nothing changed.
+//!   (a verdict, a claim or close, a landing, a refused land, budget spent,
+//!   a file another seat's workspace changed too), then the row. Silent when nothing
+//!   changed.
 //!
 //! The last turn is read from the transcript the payload names: the time of
 //! its last assistant message. No state is kept between calls.
@@ -367,6 +368,21 @@ pub fn render(
             changes.push(board::over_budget(&goal.id));
         }
     }
+    // the workspaces are read only now, so an overlap is news when one of
+    // its files changed on either side since the last turn: before then both
+    // sides already held it
+    let mine = board::unlanded(p.events(seat), now);
+    for o in row.overlaps.get().map_or(&[][..], Vec::as_slice) {
+        let theirs = board::unlanded(p.events(&o.seat), now);
+        let touched = |f: &String| {
+            [&mine, &theirs]
+                .iter()
+                .any(|side| side.get(f).is_some_and(|(t, _)| *t > since))
+        };
+        if o.files.iter().any(touched) {
+            changes.push(board::overlap(o));
+        }
+    }
     let unread = unread(&p, seat, since, now);
     if changes.is_empty() && unread.is_empty() {
         return String::new();
@@ -712,5 +728,53 @@ mod tests {
         );
         assert!(out.contains("since your last turn"), "{out}");
         assert_eq!(crate::fold::projection::folds() - before, 1);
+    }
+
+    #[test]
+    fn an_overlap_is_news_only_when_a_shared_file_changed_since_the_last_turn() {
+        let now = at("2026-10-13T12:00:00Z");
+        let unlanded = |t: &str, seat: &str, path: &str| {
+            let mut e = Event::new(at(t), Kind::Unlanded, "jj");
+            e.t_end = Some(now);
+            e.actor = Some(seat.into());
+            e.set_attr(attr::PATH, path);
+            e
+        };
+        let all = crate::event::coverage(
+            crate::event::ALL_HISTORY,
+            None,
+            &["land", "verdict", "commit", "gate_run", "claim", "close"],
+            "test",
+            None,
+        );
+        let read = crate::event::coverage(now, Some(now), &["state:unlanded"], "jj", None);
+        let ledger = |events: Vec<Event>| {
+            adapters::resolve(
+                &config(),
+                events
+                    .into_iter()
+                    .chain([all.clone(), read.clone()])
+                    .collect(),
+            )
+        };
+        let last_turn = Some(at("2026-10-13T11:00:00Z"));
+        let said =
+            |l: &Ledger| render(l, &config(), "andon-1b", "UserPromptSubmit", last_turn, now);
+        // andon-1a changed render.rs after andon-1b's last turn: news
+        let l = ledger(vec![
+            unlanded("2026-10-13T10:00:00Z", "andon-1b", "src/render.rs"),
+            unlanded("2026-10-13T11:30:00Z", "andon-1a", "src/render.rs"),
+        ]);
+        let out = said(&l);
+        assert!(
+            out.contains("since your last turn: overlaps andon-1a on 1 file (src/render.rs)"),
+            "{out}"
+        );
+        // both sides held it unchanged since before the last turn: not news
+        let l = ledger(vec![
+            unlanded("2026-10-13T10:00:00Z", "andon-1b", "src/render.rs"),
+            unlanded("2026-10-13T10:30:00Z", "andon-1a", "src/render.rs"),
+        ]);
+        assert_eq!(said(&l), "");
     }
 }

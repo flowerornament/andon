@@ -153,7 +153,7 @@ const CASES: &[Case] = &[
     Case {
         adapter: "sessions",
         input: "a transcript line mid-file that is not JSON",
-        expect: Expect::Gap(&["session_active"]),
+        expect: Expect::Gap(&["session_active", "edit"]),
         build: |dir| {
             write(
                 &dir.join("projects/-x-1a/s.jsonl"),
