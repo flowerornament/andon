@@ -70,3 +70,28 @@ The reviewer re-accepted with defects; amended here:
   This replaces the line above saying `just check` runs it.
 - A transcript reader that stops is an error, not a shorter ledger; jj's op
   log failure carries jj's own message.
+
+## Amendment: a session is each workspace's for its own calls (2026-10-20, andon-90p)
+
+This replaces the rule above that a session belongs to the directory it is
+attributed to. A session that moved between workspaces was given whole to
+the one it used most. The coordinator's session that started in the
+colocated checkout and moved to `andon-1a` counted its hours to seat
+`andon`, and `andon-1a` read 0.0 active hours. A budget is a refusal
+input, so this was a wrong fact.
+
+- Each tool call carries the directory it ran in: a Claude Code line's
+  `cwd`, or the Codex `turn_context` that preceded the call. Activity
+  spans, spawns and edits are credited by that directory.
+- A span whose calls move to another directory ends at the move, and the
+  next begins there, so the time up to the move stays the earlier
+  directory's.
+- A call in a subdirectory (`ws/src`) is `ws`'s when the session also
+  worked in `ws`: the shortest kept directory of the transcript that
+  contains it.
+- The scoped read (the hook's) keeps the calls under the seat's root, so
+  the hook's row is still the board's.
+- A Codex rollout that started outside every kept directory is still not
+  read. Rollouts are many and large, and reading them all doubled the
+  capture time on this machine. One that starts in a kept directory and
+  moves is credited per call.

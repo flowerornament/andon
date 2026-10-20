@@ -12,7 +12,6 @@
 //! events carry its root session in `ids.session` and its own id in
 //! `ids.critic_session`, so its effort counts for the seat that started it.
 
-use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -35,12 +34,58 @@ pub struct Transcript {
     /// The root session, for a subagent.
     pub root: Option<String>,
     pub subagent: bool,
-    pub cwd: BTreeMap<String, usize>,
-    pub calls: Vec<Timestamp>,
-    pub spawns: Vec<(Timestamp, String)>,
-    /// Files edit tool calls wrote: when, the tool, the path as written.
-    pub edits: Vec<(Timestamp, String, String)>,
+    /// Each tool call: when, and the directory it ran in.
+    pub calls: Vec<(Timestamp, String)>,
+    /// Each subagent started: when, what for, and from which directory.
+    pub spawns: Vec<(Timestamp, String, String)>,
+    /// Files edit tool calls wrote: when, the tool, the path as written,
+    /// and the directory the call ran in.
+    pub edits: Vec<(Timestamp, String, String, String)>,
     pub source: String,
+}
+
+impl Transcript {
+    /// Every directory a call ran in.
+    #[must_use]
+    pub fn cwds(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.calls.iter().map(|(_, c)| c.as_str()).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The calls, spawns and edits made in a directory `keep` accepts, each
+    /// directory taken to its workspace: the shortest kept directory of the
+    /// transcript's that contains it (a call in `ws/src` is `ws`'s, when the
+    /// session also worked in `ws`).
+    #[must_use]
+    pub fn kept(mut self, keep: &dyn Fn(&str) -> bool) -> Self {
+        let dirs: Vec<String> = self
+            .cwds()
+            .into_iter()
+            .filter(|c| keep(c))
+            .map(str::to_owned)
+            .collect();
+        let root = |cwd: &str| -> Option<String> {
+            dirs.iter()
+                .filter(|d| Path::new(cwd).starts_with(d.as_str()))
+                .min_by_key(|d| d.len())
+                .cloned()
+        };
+        self.calls = std::mem::take(&mut self.calls)
+            .into_iter()
+            .filter_map(|(t, c)| Some((t, root(&c)?)))
+            .collect();
+        self.spawns = std::mem::take(&mut self.spawns)
+            .into_iter()
+            .filter_map(|(t, w, c)| Some((t, w, root(&c)?)))
+            .collect();
+        self.edits = std::mem::take(&mut self.edits)
+            .into_iter()
+            .filter_map(|(t, tool, p, c)| Some((t, tool, p, root(&c)?)))
+            .collect();
+        self
+    }
 }
 
 /// The kinds a transcript yields.
@@ -115,7 +160,7 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
                             let got = if *is_codex {
                                 codex(file, configured, root, since)
                             } else {
-                                claude_kept(file, configured, since)
+                                claude_since(file, since).map(Some)
                             };
                             (file.clone(), got)
                         })
@@ -150,13 +195,11 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
                 continue;
             }
         };
-        let Some(cwd) = most(&t.cwd) else { continue };
-        if !configured(&cwd) {
-            continue;
-        }
-        if in_root(&cwd) {
-            events.extend(spans(&t, &cwd, gap, since));
-        }
+        // each call counts for the directory it ran in, never for where
+        // the session mostly worked: a session that moves between
+        // workspaces is each seat's for its own part
+        let t = t.kept(&|cwd| configured(cwd) && in_root(cwd));
+        events.extend(spans(&t, gap, since));
     }
     // sessions are covered from `since` (or all history) to now; a scoped
     // read covers only its seat
@@ -319,16 +362,6 @@ fn lines(file: &Path, since: Option<Timestamp>, needles: &[&str]) -> Result<Vec<
     Ok(out)
 }
 
-/// A Claude Code transcript, if its working directory is kept.
-fn claude_kept(
-    file: &Path,
-    keep_cwd: &dyn Fn(&str) -> bool,
-    since: Option<Timestamp>,
-) -> Result<Option<Transcript>, String> {
-    let t = claude_since(file, since)?;
-    Ok(most(&t.cwd).filter(|cwd| keep_cwd(cwd)).map(|_| t))
-}
-
 /// A Claude Code transcript. Subagent transcripts live under `subagents/`.
 #[must_use]
 pub fn claude(file: &Path) -> Transcript {
@@ -342,6 +375,9 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
         source: file.display().to_string(),
         ..Transcript::default()
     };
+    // a line names the directory it ran in; one that does not ran where
+    // the last one did
+    let mut cwd = String::new();
     for o in lines(file, since, &["\"tool_use\""])? {
         if t.session.is_none() {
             t.session = o["sessionId"].as_str().map(str::to_owned);
@@ -358,8 +394,8 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
             continue;
         };
         let ts = parse_instant(ts).map_err(|e| format!("a turn's time {ts:?}: {e}"))?;
-        if let Some(cwd) = o["cwd"].as_str() {
-            *t.cwd.entry(cwd.to_owned()).or_default() += 1;
+        if let Some(dir) = o["cwd"].as_str() {
+            dir.clone_into(&mut cwd);
         }
         if o["type"] != "assistant" {
             continue;
@@ -368,11 +404,11 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
             if c["type"] != "tool_use" {
                 continue;
             }
-            t.calls.push(ts);
+            t.calls.push((ts, cwd.clone()));
             let name = c["name"].as_str().unwrap_or_default();
             if matches!(name, "Agent" | "Task") {
                 let what = c["input"]["description"].as_str().unwrap_or_default();
-                t.spawns.push((ts, what.to_owned()));
+                t.spawns.push((ts, what.to_owned(), cwd.clone()));
             }
             let path = match name {
                 "Edit" | "Write" | "MultiEdit" => c["input"]["file_path"].as_str(),
@@ -380,7 +416,8 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
                 _ => None,
             };
             if let Some(path) = path.filter(|p| !p.is_empty()) {
-                t.edits.push((ts, name.to_owned(), path.to_owned()));
+                t.edits
+                    .push((ts, name.to_owned(), path.to_owned(), cwd.clone()));
             }
         }
     }
@@ -388,8 +425,9 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
 }
 
 /// A Codex rollout; `Ok(None)` when its first line names a directory not
-/// kept, or (with `root`) when the directory it is attributed to is not
-/// under `root`. The attribution is read first from the rollout's small
+/// kept (rollouts are many and large: one started outside every kept
+/// directory is never read), or (with `root`) when it never worked under
+/// `root`. Where it worked is read first from the rollout's small
 /// `turn_context` lines, so a scoped read parses only its seat's rollouts.
 ///
 /// # Errors
@@ -417,36 +455,46 @@ pub fn codex(
         serde_json::from_str::<Value>(&first)
             .map_err(|_| "its first line is not JSON".to_owned())?
     };
+    let mut cwd = String::new();
     if meta["type"] == "session_meta" {
         let payload = &meta["payload"];
-        let cwd = payload["cwd"].as_str().unwrap_or_default();
-        if !keep_cwd(cwd) {
-            return Ok(None);
-        }
+        payload["cwd"]
+            .as_str()
+            .unwrap_or_default()
+            .clone_into(&mut cwd);
         t.session = payload["id"].as_str().map(str::to_owned);
         t.subagent = payload["thread_source"] == "subagent";
         if t.subagent {
             t.root = payload["session_id"].as_str().map(str::to_owned);
         }
-        *t.cwd.entry(cwd.to_owned()).or_default() += 1;
     }
-    let turns = lines(file, since, &["\"turn_context\""])?;
-    for o in turns.iter().skip(1) {
-        if o["type"] == "turn_context"
-            && let Some(cwd) = o["payload"]["cwd"].as_str()
-        {
-            *t.cwd.entry(cwd.to_owned()).or_default() += 1;
-        }
+    if !keep_cwd(&cwd) {
+        return Ok(None);
     }
-    if let Some(root) = root {
-        let attributed = most(&t.cwd).unwrap_or_default();
-        if !(attributed == root || attributed.starts_with(&format!("{root}/"))) {
+    let under_root = |dir: &str| root.is_none_or(|r| dir == r || dir.starts_with(&format!("{r}/")));
+    if !under_root(&cwd) {
+        let turns = lines(file, since, &["\"turn_context\""])?;
+        let worked = turns.iter().skip(1).any(|o| {
+            o["type"] == "turn_context" && o["payload"]["cwd"].as_str().is_some_and(under_root)
+        });
+        if !worked {
             return Ok(None);
         }
     }
-    let needles = ["\"function_call\"", "\"custom_tool_call\""];
+    let needles = [
+        "\"turn_context\"",
+        "\"function_call\"",
+        "\"custom_tool_call\"",
+    ];
     for o in lines(file, since, &needles)?.into_iter().skip(1) {
         let payload = &o["payload"];
+        // a turn says where the calls after it run
+        if o["type"] == "turn_context" {
+            if let Some(dir) = payload["cwd"].as_str() {
+                dir.clone_into(&mut cwd);
+            }
+            continue;
+        }
         // a line with no time is not a turn (a summary, a header); a time
         // that does not parse is a transcript andon cannot read
         let Some(ts) = o["timestamp"].as_str() else {
@@ -455,14 +503,14 @@ pub fn codex(
         let ts = parse_instant(ts).map_err(|e| format!("a turn's time {ts:?}: {e}"))?;
         let kind = payload["type"].as_str().unwrap_or_default();
         if matches!(kind, "function_call" | "custom_tool_call") {
-            t.calls.push(ts);
+            t.calls.push((ts, cwd.clone()));
             let name = payload["name"].as_str().unwrap_or_default();
             if name.contains("spawn") {
-                t.spawns.push((ts, name.to_owned()));
+                t.spawns.push((ts, name.to_owned(), cwd.clone()));
             }
             if name == "apply_patch" {
                 for path in patch_paths(payload) {
-                    t.edits.push((ts, name.to_owned(), path));
+                    t.edits.push((ts, name.to_owned(), path, cwd.clone()));
                 }
             }
         }
@@ -526,19 +574,15 @@ pub fn workspace_path(path: &str, cwd: &str) -> String {
     }
 }
 
-/// Activity spans, spawns and edits for one transcript.
+/// Activity spans, spawns and edits for one transcript, each counted for
+/// the directory its call ran in (the actor is that directory's name, so a
+/// workspace is a seat). Calls closer than `gap` form one span; a span
+/// whose calls move to another directory ends where the move is, and the
+/// next begins there.
 #[must_use]
-pub fn spans(
-    t: &Transcript,
-    cwd: &str,
-    gap: SignedDuration,
-    since: Option<Timestamp>,
-) -> Vec<Event> {
+pub fn spans(t: &Transcript, gap: SignedDuration, since: Option<Timestamp>) -> Vec<Event> {
     let mut calls = t.calls.clone();
     calls.sort();
-    let actor = Path::new(cwd)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned());
     let (session, critic) = if t.subagent {
         (
             t.root.clone().or_else(|| t.session.clone()),
@@ -547,65 +591,66 @@ pub fn spans(
     } else {
         (t.session.clone(), None)
     };
-    let make = |start: Timestamp, kind: Kind| {
+    let make = |start: Timestamp, kind: Kind, cwd: &str| {
         let mut e = Event::new(start, kind, t.source.clone());
-        e.actor.clone_from(&actor);
+        e.actor = Path::new(cwd)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned());
         e.ids.session.clone_from(&session);
         e.ids.critic_session.clone_from(&critic);
         e.set_attr(attr::CWD, cwd.to_owned());
         e.set_attr(attr::HARNESS, t.harness);
         e
     };
-    let mut out = Vec::new();
-    let mut span: Option<(Timestamp, Timestamp, usize)> = None;
-    for call in calls {
+    let mut out: Vec<(Timestamp, Timestamp, usize, &str)> = Vec::new();
+    let mut span: Option<(Timestamp, Timestamp, usize, &str)> = None;
+    for (call, cwd) in &calls {
+        let call = *call;
         span = match span {
-            Some((start, end, n)) if call.duration_since(end) <= gap => Some((start, call, n + 1)),
-            Some((start, end, n)) => {
-                out.push((start, end, n));
-                Some((call, call, 1))
+            Some((start, end, n, dir)) if call.duration_since(end) <= gap && dir == cwd => {
+                Some((start, call, n + 1, dir))
             }
-            None => Some((call, call, 1)),
+            // the session moved on within the gap: the time until the move
+            // is the earlier directory's
+            Some((start, end, n, dir)) if call.duration_since(end) <= gap => {
+                out.push((start, call, n, dir));
+                Some((call, call, 1, cwd))
+            }
+            Some(done) => {
+                out.push(done);
+                Some((call, call, 1, cwd))
+            }
+            None => Some((call, call, 1, cwd)),
         };
     }
     out.extend(span);
     let mut events: Vec<Event> = out
         .into_iter()
-        .filter(|(_, end, _)| since.is_none_or(|s| *end >= s))
-        .map(|(start, end, n)| {
-            let mut e = make(start, Kind::SessionActive);
+        .filter(|(_, end, _, _)| since.is_none_or(|s| *end >= s))
+        .map(|(start, end, n, cwd)| {
+            let mut e = make(start, Kind::SessionActive, cwd);
             e.t_end = Some(end);
             #[allow(clippy::cast_possible_wrap)]
             e.set_attr(attr::CALLS, n as i64);
             e
         })
         .collect();
-    for (ts, what) in &t.spawns {
+    for (ts, what, cwd) in &t.spawns {
         if since.is_none_or(|s| *ts >= s) {
-            let mut e = make(*ts, Kind::Spawn);
+            let mut e = make(*ts, Kind::Spawn, cwd);
             e.set_attr(attr::DESCRIPTION, what.clone());
             events.push(e);
         }
     }
-    for (ts, tool, path) in &t.edits {
+    for (ts, tool, path, cwd) in &t.edits {
         if since.is_none_or(|s| *ts >= s) {
-            let mut e = make(*ts, Kind::Edit);
+            let mut e = make(*ts, Kind::Edit, cwd);
             e.set_attr(attr::TOOL, tool.clone());
             e.set_attr(attr::PATH, workspace_path(path, cwd));
             events.push(e);
         }
     }
     events
-}
-
-fn most(counts: &BTreeMap<String, usize>) -> Option<String> {
-    let mut best: Option<(&String, usize)> = None;
-    for (k, &n) in counts {
-        if best.is_none_or(|(_, m)| n > m) {
-            best = Some((k, n));
-        }
-    }
-    best.map(|(k, _)| k.clone())
 }
 
 #[cfg(test)]
@@ -623,15 +668,19 @@ mod tests {
             harness: "claude",
             session: Some("s1".into()),
             calls: vec![
-                ts("2026-10-13T10:00:00Z"),
-                ts("2026-10-13T10:05:00Z"),
-                ts("2026-10-13T10:30:00Z"),
+                (ts("2026-10-13T10:00:00Z"), "/code/andon-1b".into()),
+                (ts("2026-10-13T10:05:00Z"), "/code/andon-1b".into()),
+                (ts("2026-10-13T10:30:00Z"), "/code/andon-1b".into()),
             ],
-            spawns: vec![(ts("2026-10-13T10:05:00Z"), "critic".into())],
+            spawns: vec![(
+                ts("2026-10-13T10:05:00Z"),
+                "critic".into(),
+                "/code/andon-1b".into(),
+            )],
             source: "t.jsonl".into(),
             ..Transcript::default()
         };
-        let events = spans(&t, "/code/andon-1b", SignedDuration::from_mins(10), None);
+        let events = spans(&t, SignedDuration::from_mins(10), None);
         let spans: Vec<(Timestamp, Option<Timestamp>)> = events
             .iter()
             .filter(|e| e.kind == Kind::SessionActive)
@@ -667,7 +716,7 @@ mod tests {
         assert_eq!(t.session.as_deref(), Some("s1"));
         assert_eq!(t.calls.len(), 2);
         assert_eq!(t.spawns.len(), 1);
-        assert_eq!(most(&t.cwd).as_deref(), Some("/code/andon-1b"));
+        assert_eq!(t.cwds(), vec!["/code/andon-1b"]);
     }
 
     #[test]
@@ -688,7 +737,7 @@ mod tests {
         ];
         std::fs::write(&file, lines.join("\n") + "\n").unwrap_or_else(|e| panic!("{e}"));
         let t = claude(&file);
-        let events = spans(&t, "/code/x-1b", SignedDuration::from_mins(10), None);
+        let events = spans(&t.kept(&|_| true), SignedDuration::from_mins(10), None);
         let edits: Vec<(&str, &str)> = events
             .iter()
             .filter(|e| e.kind == Kind::Edit)
@@ -740,5 +789,93 @@ mod tests {
         );
         assert_eq!(workspace_path("docs/new.md", "/code/x-1a"), "docs/new.md");
         assert_eq!(workspace_path("/code/x-1a", "/code/x-1a"), "/code/x-1a");
+    }
+
+    #[test]
+    fn a_session_that_moves_credits_each_workspace_with_its_own_part() {
+        // one transcript: 10:00-10:20 in andon (and its src), then 10:30-11:00
+        // in andon-1a, editing there
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("s.jsonl");
+        let call = |t: &str, cwd: &str, name: &str, input: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"{t}","sessionId":"s1","cwd":"{cwd}","message":{{"content":[{{"type":"tool_use","name":"{name}","input":{input}}}]}}}}"#
+            )
+        };
+        let lines = [
+            call("2026-10-13T10:00:00Z", "/code/andon", "Bash", "{}"),
+            call("2026-10-13T10:10:00Z", "/code/andon/src", "Bash", "{}"),
+            call("2026-10-13T10:20:00Z", "/code/andon", "Bash", "{}"),
+            call(
+                "2026-10-13T10:30:00Z",
+                "/code/andon-1a",
+                "Edit",
+                r#"{"file_path":"/code/andon-1a/src/x.rs"}"#,
+            ),
+            call("2026-10-13T10:45:00Z", "/code/andon-1a", "Bash", "{}"),
+            call("2026-10-13T11:00:00Z", "/code/andon-1a", "Bash", "{}"),
+        ];
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap_or_else(|e| panic!("{e}"));
+        let t = claude(&file).kept(&|_| true);
+        let events = spans(&t, SignedDuration::from_mins(15), None);
+        let got: Vec<(&str, &str, Option<Timestamp>, &str)> = events
+            .iter()
+            .map(|e| {
+                (
+                    e.kind.as_str(),
+                    e.actor.as_deref().unwrap_or_default(),
+                    e.t_end,
+                    e.attr_str(attr::PATH).unwrap_or_default(),
+                )
+            })
+            .collect();
+        let ts = |s: &str| Some(parse_instant(s).unwrap_or_else(|e| panic!("{e}")));
+        // the move at 10:30 ends andon's span there; a call in andon/src is
+        // andon's
+        assert_eq!(
+            got,
+            vec![
+                ("session_active", "andon", ts("2026-10-13T10:30:00Z"), ""),
+                ("session_active", "andon-1a", ts("2026-10-13T11:00:00Z"), ""),
+                ("edit", "andon-1a", None, "src/x.rs"),
+            ]
+        );
+        // a read kept to one workspace keeps only its part
+        let t = claude(&file).kept(&|c| c.starts_with("/code/andon-1a"));
+        let events = spans(&t, SignedDuration::from_mins(15), None);
+        assert!(
+            events
+                .iter()
+                .all(|e| e.actor.as_deref() == Some("andon-1a"))
+        );
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn a_codex_rollout_credits_each_call_to_its_turns_directory() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("r.jsonl");
+        let lines = [
+            r#"{"timestamp":"2026-10-13T10:00:00Z","type":"session_meta","payload":{"id":"r1","cwd":"/code/x-dev"}}"#,
+            r#"{"timestamp":"2026-10-13T10:00:01Z","type":"response_item","payload":{"type":"function_call","name":"exec"}}"#,
+            r#"{"timestamp":"2026-10-13T10:05:00Z","type":"turn_context","payload":{"cwd":"/code/x-1b"}}"#,
+            r#"{"timestamp":"2026-10-13T10:05:01Z","type":"response_item","payload":{"type":"function_call","name":"exec"}}"#,
+        ];
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap_or_else(|e| panic!("{e}"));
+        let keep = |c: &str| c.starts_with("/code/x-");
+        let t = codex(&file, &keep, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("the rollout worked in a kept directory"));
+        let events = spans(&t.kept(&keep), SignedDuration::from_mins(10), None);
+        let actors: Vec<&str> = events.iter().filter_map(|e| e.actor.as_deref()).collect();
+        assert_eq!(actors, vec!["x-dev", "x-1b"]);
+        // scoped to another workspace, the rollout is not read at all
+        assert!(matches!(
+            codex(&file, &keep, Some("/code/x-1a"), None),
+            Ok(None)
+        ));
+        // nor is one that started outside every kept directory
+        let only_1b = |c: &str| c.starts_with("/code/x-1b");
+        assert!(matches!(codex(&file, &only_1b, None, None), Ok(None)));
     }
 }

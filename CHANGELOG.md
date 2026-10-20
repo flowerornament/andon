@@ -4,6 +4,11 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- A session that moves between workspaces counts for each seat's own part:
+  every activity span, spawn and edit is credited by the directory its own
+  tool calls ran in, never by where the session mostly worked. A span
+  splits where the session moved.
+
 - **Overlapping unlanded edits** (`.design/2026-10-19-overlap-and-presence.md`
   §1). The jj adapter reads each workspace's unlanded files: the net change
   since it forked from the trunk, as of its last snapshot, whatever tool
