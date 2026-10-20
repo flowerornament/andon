@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::event::ALL_HISTORY;
+use crate::event::attr;
 use crate::event::{Event, Kind, Outcome};
 use crate::fold::gauge::{Gauge, Gauger, Scope, Span, Spec, TRACKER};
 use crate::fold::projection::{Projection, held, session_minutes};
@@ -47,6 +48,9 @@ pub const USED: Spec = Spec::new(
 pub const USED_RUNS: Spec = Spec::new(Scope::Row, "goals.*.used", &["run"], Span::Origin)
     .over(&[&GOALS])
     .variant("runs");
+/// Whether a session runs at the seat now, and in what status: harness
+/// session files, read as current state.
+pub const STATE: Spec = Spec::new(Scope::Row, "state", &["presence"], Span::State);
 pub const USED_WALL: Spec = Spec::new(Scope::Row, "goals.*.used", &[], Span::Origin)
     .over(&[&GOALS])
     .variant("wall-clock");
@@ -64,6 +68,7 @@ pub const SPECS: &[&Spec] = &[
     &USED,
     &USED_RUNS,
     &USED_WALL,
+    &STATE,
 ];
 
 /// The board.
@@ -106,6 +111,10 @@ pub const FLAGS: &[(&str, &str)] = &[
         "the seat's last land run after its last landing failed or was refused.",
     ),
     (
+        "idle Nh holding G",
+        "the seat's live session has waited N hours for a prompt while it holds G (`[board] idle_minutes`).",
+    ),
+    (
         "N runs since last landing",
         "runs piling up with nothing landed (not for hubs).",
     ),
@@ -144,6 +153,11 @@ pub struct Row {
     pub last_verdict: Gauge<Option<Verdict>>,
     /// Comments on the seat's lead goal since it was claimed.
     pub findings: Gauge<usize>,
+    /// The seat's live session now (`None` inside when none runs). Absent
+    /// where no source of live sessions was read: a project without one
+    /// has no such column, not a column of unknowns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<Gauge<Option<Presence>>>,
     /// Flags read only known gauges: a flag never speaks where the ledger
     /// could not look.
     pub flags: Vec<String>,
@@ -187,6 +201,42 @@ impl Goal {
 #[must_use]
 pub fn over_budget(goal: &str) -> String {
     format!("over budget on {goal}")
+}
+
+/// A seat's live sessions at an instant, as one status: busy while any is
+/// busy (since the longest-running turn began), else idle since the last
+/// turn ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Presence {
+    pub status: String,
+    pub since: Timestamp,
+    pub sessions: usize,
+}
+
+/// The status of the seat's sessions that run at `asof`.
+#[must_use]
+pub fn presence(events: &[&Event], asof: Timestamp) -> Option<Presence> {
+    let live: Vec<&Event> = events
+        .iter()
+        .copied()
+        .filter(|e| e.kind == Kind::Presence && e.t <= asof && e.t_end.is_some_and(|t| t >= asof))
+        .collect();
+    let busy: Vec<Timestamp> = live
+        .iter()
+        .filter(|e| e.attr_str(attr::STATUS) == Some("busy"))
+        .map(|e| e.t)
+        .collect();
+    let (status, since) = if let Some(t) = busy.iter().min() {
+        ("busy", *t)
+    } else {
+        let e = live.iter().max_by_key(|e| e.t)?;
+        (e.attr_str(attr::STATUS).unwrap_or("live"), e.t)
+    };
+    Some(Presence {
+        status: status.to_owned(),
+        since,
+        sessions: live.len(),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,7 +313,7 @@ pub fn board_of(p: &Projection<'_>, asof: Timestamp) -> Board {
             .collect()
     };
     Board {
-        schema: 2,
+        schema: 3,
         asof,
         window_hours,
         goal_schema: config.goal_schema(),
@@ -351,6 +401,10 @@ fn row(
             t.last_verdict.clone(),
         ),
         findings,
+        state: p
+            .coverage
+            .reads("state:presence")
+            .then(|| g.gauge(&STATE, s, None, presence(p.events(&seat), g.to))),
         flags: Vec::new(),
         seat,
     };
@@ -554,6 +608,14 @@ fn flags(
             }
         }
     }
+    // idle past the threshold while holding a goal: someone is being waited on
+    if let (Some(Some(state)), Some(goal)) = (row.state.as_ref().and_then(Gauge::get), held.first())
+        && state.status == "idle"
+        && minutes(state.since, asof) >= config.board.idle_minutes
+    {
+        let hours = minutes(state.since, asof) / 60.0;
+        flags.push(format!("idle {hours:.1}h holding {}", goal.id));
+    }
     // a refused land run after the last landing: only where the last landing
     // is known, so no later landing went unread
     if row.last_land.is_known()
@@ -634,6 +696,82 @@ mod tests {
 
     fn covered(from: &str, kinds: &[&str]) -> Event {
         crate::event::coverage(at(from), None, kinds, "test", None)
+    }
+
+    /// A live session at `seat` in `status` since `since`, read at `capture`.
+    fn live(seat: &str, status: &str, since: &str, capture: &str) -> Vec<Event> {
+        let mut e = event(since, Kind::Presence, seat, None);
+        e.t_end = Some(at(capture));
+        e.set_attr(attr::STATUS, status);
+        let read = crate::event::coverage(
+            at(capture),
+            Some(at(capture)),
+            &["state:presence"],
+            "t",
+            None,
+        );
+        vec![e, read]
+    }
+
+    fn presence_board(status: &str, since: &str) -> Board {
+        let noon = "2026-10-13T12:00:00Z";
+        let mut events = vec![
+            event("2026-10-13T08:00:00Z", Kind::Claim, "x-1a", Some("x-goal")),
+            covered(
+                "1970-01-01T00:00:00Z",
+                &["create", "claim", "close", "land", "run"],
+            ),
+        ];
+        events.extend(live("x-1a", status, since, noon));
+        let ledger = adapters::resolve(&config(), events);
+        board(&ledger, &config(), at(noon))
+    }
+
+    #[test]
+    fn an_idle_seat_holding_a_goal_is_flagged_and_a_busy_one_is_not() {
+        let b = presence_board("idle", "2026-10-13T09:30:00Z");
+        let row = &b.seats[0];
+        let state = row.state.as_ref().and_then(Gauge::get).cloned().flatten();
+        assert_eq!(state.map(|s| s.status), Some("idle".to_owned()));
+        assert!(
+            row.flags.contains(&"idle 2.5h holding x-goal".to_owned()),
+            "{:?}",
+            row.flags
+        );
+        // x-1b runs nothing: known, and no session
+        assert_eq!(b.seats[1].state.as_ref().and_then(Gauge::get), Some(&None));
+
+        let b = presence_board("busy", "2026-10-13T09:30:00Z");
+        assert!(
+            !b.seats[0].flags.iter().any(|f| f.starts_with("idle")),
+            "{:?}",
+            b.seats[0].flags
+        );
+        // idle, but not long enough
+        let b = presence_board("idle", "2026-10-13T11:30:00Z");
+        assert!(
+            !b.seats[0].flags.iter().any(|f| f.starts_with("idle")),
+            "{:?}",
+            b.seats[0].flags
+        );
+    }
+
+    #[test]
+    fn presence_before_the_capture_is_unknown_and_without_a_source_absent() {
+        let noon = "2026-10-13T12:00:00Z";
+        let ledger = adapters::resolve(
+            &config(),
+            live("x-1a", "busy", "2026-10-13T09:00:00Z", noon),
+        );
+        // the files say who runs now, not who ran at ten
+        let b = board(&ledger, &config(), at("2026-10-13T10:00:00Z"));
+        let state = b.seats[0]
+            .state
+            .as_ref()
+            .unwrap_or_else(|| panic!("a source was read"));
+        assert!(!state.is_known(), "{state:?}");
+        let none = adapters::resolve(&config(), Vec::new());
+        assert!(board(&none, &config(), at(noon)).seats[0].state.is_none());
     }
 
     #[test]

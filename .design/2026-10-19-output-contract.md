@@ -112,3 +112,12 @@ numeric tracker field such as bd's `estimated_minutes`. Its `used` is then
 in minutes too. The field and its meaning are unchanged, so the schema
 stays 2. Its values are `agent-hours`, `wall-clock`, `runs` and `minutes`,
 or `null` where the budget states no amount.
+
+## Amendment: board schema 3 (2026-10-19, andon-3im)
+
+Each row gains `state`, present only where a source of live sessions was
+read (`[adapters.presence]`). It is a gauge: `null` when no session runs at
+the seat, else `status` (`busy`, `idle`, or `live` where the harness records
+none), `since` (when that status began) and `sessions` (how many run). The
+text gains a `state` column, under the same condition. The flag
+`idle Nh holding G` is new. Every schema 2 field is unchanged.

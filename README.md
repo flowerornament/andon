@@ -113,7 +113,7 @@ A scorecard window that ends after now counts up to now and says so. `--json` an
 
 ## Adapters
 
-Core adapters read general tools: jj, git, bd, GitHub, Ferry receipts, hail, and Claude Code and Codex transcripts. Anything particular to one project (its evidence store, its desk layout, its review records) reaches andon through an external adapter the project owns: a program that prints andon events as JSONL, declared by name in the project's `andon.toml`.
+Core adapters read general tools: jj, git, bd, GitHub, Ferry receipts, hail, Claude Code and Codex transcripts, and Claude Code's per-session files for who is running now (`[adapters.presence]`). Anything particular to one project (its evidence store, its desk layout, its review records) reaches andon through an external adapter the project owns: a program that prints andon events as JSONL, declared by name in the project's `andon.toml`.
 
 ```toml
 [[adapters.external]]

@@ -338,6 +338,10 @@ pub struct BoardRules {
     /// Flag a seat with this many runs since its last landing.
     #[serde(default = "default_runs_without_land")]
     pub runs_without_land: usize,
+    /// Flag a seat whose live session has been idle this many minutes while
+    /// it holds a goal.
+    #[serde(default = "default_idle_minutes")]
+    pub idle_minutes: f64,
 }
 
 impl Default for BoardRules {
@@ -347,12 +351,16 @@ impl Default for BoardRules {
             budget_unit: default_budget_unit(),
             window_hours: default_window_hours(),
             runs_without_land: default_runs_without_land(),
+            idle_minutes: default_idle_minutes(),
         }
     }
 }
 
 const fn default_window_hours() -> f64 {
     24.0
+}
+const fn default_idle_minutes() -> f64 {
+    60.0
 }
 const fn default_runs_without_land() -> usize {
     20
@@ -376,6 +384,7 @@ pub struct Adapters {
     pub ferry: Option<FerryConfig>,
     pub sessions: Option<SessionsConfig>,
     pub hail: Option<HailConfig>,
+    pub presence: Option<PresenceConfig>,
     /// Project-owned adapters: programs or files that speak andon's ledger
     /// format (see `adapters::external`). Each is named, and every event it
     /// emits carries its name.
@@ -596,6 +605,20 @@ pub struct SessionsConfig {
 
 const fn default_gap() -> u32 {
     10
+}
+
+/// Harness session files: who is running now.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceConfig {
+    /// Claude Code session directories (`<config dir>/sessions`), `*`
+    /// matching within a path component.
+    #[serde(default = "claude_sessions")]
+    pub claude: Vec<String>,
+}
+
+fn claude_sessions() -> Vec<String> {
+    vec!["~/.claude/sessions".into()]
 }
 
 #[derive(Debug, Clone, Deserialize)]

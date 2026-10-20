@@ -256,7 +256,7 @@ fn check_transcript_and_row(
             let row = board.seats.iter().find(|r| r.seat == seat);
             match row {
                 Some(r) => {
-                    let columns = render::board_columns(config.goal_schema());
+                    let columns = render::board_columns(config.goal_schema(), &board.seats);
                     line(true, "row", self::line(r, now, &columns));
                 }
                 None => {
@@ -346,7 +346,7 @@ pub fn render(
     let Some(row) = now_board.seats.into_iter().find(|r| r.seat == seat) else {
         return String::new();
     };
-    let columns = render::board_columns(config.goal_schema());
+    let columns = render::board_columns(config.goal_schema(), std::slice::from_ref(&row));
     if event == "SessionStart" {
         return format!("andon: {}\n", line(&row, now, &columns));
     }

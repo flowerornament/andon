@@ -38,3 +38,7 @@ claude = ["~/.claude*/projects/*-code-andon*"]
 codex = ["~/.codex/sessions"]
 cwd = ["~/code/andon*"]
 since = "2026-10-12"
+
+[adapters.presence]
+# who is running now: Claude Code's per-session files (`<config dir>/sessions`)
+claude = ["~/.claude*/sessions"]

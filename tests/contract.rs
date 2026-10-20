@@ -168,6 +168,15 @@ const CASES: &[Case] = &[
         },
     },
     Case {
+        adapter: "presence",
+        input: "a session file that is not JSON",
+        expect: Expect::Gap(&["state:presence"]),
+        build: |dir| {
+            write(&dir.join("sessions/1.json"), "{not json");
+            Some("[adapters.presence]\nclaude = [\"sessions\"]\n".to_owned())
+        },
+    },
+    Case {
         adapter: "jj",
         input: "a store whose operation heads cannot be listed",
         expect: Expect::Refused,

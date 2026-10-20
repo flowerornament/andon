@@ -263,6 +263,7 @@ pub fn noun(kind: &str) -> &str {
         "claim" => "claims",
         "close" => "closes",
         "session_active" => "sessions",
+        "presence" | "state:presence" => "live sessions",
         "other:comment" => "findings",
         "state:create" | "state:claim" | "state:close" => "goal states",
         other => other,

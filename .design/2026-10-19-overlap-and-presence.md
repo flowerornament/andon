@@ -60,13 +60,19 @@ pid is not running, or is running but started at another time than
   the cwd, status, and since. `t` and `t_end` are both the capture instant,
   as bd's current-state claims are. `asof` a past instant therefore shows
   presence as unknown, which is the coverage rule working as intended.
-- Checking the pid is the one process-table read in andon. It goes through
-  `adapters::command` (`ps -o lstart= -p <pid>`), and andon writes nothing.
+- Checking the pid is the one process-table read in andon: one `ps -A -o
+  pid= -o lstart=` through `adapters::command`, with `TZ=UTC`, because the
+  harness records `procStart` in UTC and `ps` prints local time. andon
+  writes nothing.
 - The board gains a `state` column (`busy 4m`, `idle 3h`, `—` for no live
-  session). It also flags a seat that is idle longer than
-  `[presence] idle_flag_minutes` (default 60) while it holds a goal:
-  `idle 3h holding andon-xyz`. That is the stuck seat the study's
+  session) when `[adapters.presence]` is configured; without it there is
+  no column, not a column of unknowns. A seat with several live sessions
+  is busy while any is. The board also flags a seat that has been idle
+  longer than `[board] idle_minutes` (default 60) while it holds a goal:
+  `idle 3.0h holding andon-xyz`. That is the stuck seat the study's
   coordinator had to ask about.
+- The hook does not read presence: it prints its own seat's row, and that
+  seat is running by definition.
 - Codex keeps no equivalent status file. Its sessions show as unknown
   until a source exists, and the adapter's coverage says so.
 

@@ -8,6 +8,7 @@ pub mod git;
 pub mod github;
 pub mod hail;
 pub mod jj;
+pub mod presence;
 pub mod sessions;
 
 use anyhow::{Context, Result};
@@ -21,7 +22,9 @@ use crate::seat::Resolver;
 /// The core adapters, by the name each one's coverage carries
 /// (`attrs.adapter`). `tests/contract.rs` holds a corrupt-input case for
 /// each, and for `external`.
-pub const CORE: &[&str] = &["jj", "git", "bd", "github", "ferry", "hail", "sessions"];
+pub const CORE: &[&str] = &[
+    "jj", "git", "bd", "github", "ferry", "hail", "sessions", "presence",
+];
 
 /// Run every configured adapter, resolve seats, and build the ledger.
 ///
@@ -93,6 +96,13 @@ fn run_adapters(
         jobs.push((
             "sessions".into(),
             Box::new(move || sessions::collect_scoped(config, c, scope)),
+        ));
+    }
+    // the hook prints its own seat, which is running by definition
+    if let Some(c) = a.presence.as_ref().filter(|_| messages) {
+        jobs.push((
+            "presence".into(),
+            Box::new(move || presence::collect(config, c)),
         ));
     }
     for c in &a.external {

@@ -31,6 +31,8 @@ const LEDGER: &str = r#"{"t":"1970-01-01T00:00:00Z","kind":"coverage","outcome":
 {"t":"2026-10-13T09:20:00Z","kind":"message","actor":"x-1b","ids":{"message":"m2"},"source":"t","attrs":{"message_kind":"fyi","to":["x-1a"],"re":"m1"}}
 {"t":"2026-10-13T09:30:00Z","kind":"other:comment","actor":"x-1b","subject":"x-abc","ids":{"goal":"x-abc"},"source":"t"}
 {"t":"2026-10-13T10:00:00Z","kind":"close","subject":"x-old","ids":{"goal":"x-old"},"source":"t"}
+{"t":"2026-10-13T12:00:00Z","t_end":"2026-10-13T12:00:00Z","kind":"coverage","outcome":"pass","source":"sessions","attrs":{"covers":["state:presence"]}}
+{"t":"2026-10-13T11:00:00Z","t_end":"2026-10-13T12:00:00Z","kind":"presence","actor":"x-1a","ids":{"session":"s1"},"source":"t","attrs":{"status":"idle","cwd":"/x-1a"}}
 "#;
 
 /// Objects keyed by data (a seat, a repository), not by field.
@@ -123,6 +125,45 @@ const BOARD_V2: &[&str] = &[
     "seats.*.runs_pass",
     "seats.*.runs_since_land",
     "seats.*.seat",
+    "unseated",
+    "unseated.*",
+    "unseated.*.goal",
+    "unseated.*.owner",
+    "window_hours",
+];
+
+/// The board's fields under schema 3: schema 2's, and each row's `state`
+/// where live sessions were read (andon-3im).
+const BOARD_V3: &[&str] = &[
+    "asof",
+    "schema",
+    "seats",
+    "seats.*",
+    "seats.*.findings",
+    "seats.*.flags",
+    "seats.*.goals",
+    "seats.*.goals.*",
+    "seats.*.goals.*.amount",
+    "seats.*.goals.*.budget",
+    "seats.*.goals.*.claimed_at",
+    "seats.*.goals.*.id",
+    "seats.*.goals.*.title",
+    "seats.*.goals.*.unit",
+    "seats.*.goals.*.used",
+    "seats.*.landings",
+    "seats.*.last_land",
+    "seats.*.last_verdict",
+    "seats.*.last_verdict.outcome",
+    "seats.*.last_verdict.subject",
+    "seats.*.last_verdict.t",
+    "seats.*.runs",
+    "seats.*.runs_pass",
+    "seats.*.runs_since_land",
+    "seats.*.seat",
+    "seats.*.state",
+    "seats.*.state.sessions",
+    "seats.*.state.since",
+    "seats.*.state.status",
     "unseated",
     "unseated.*",
     "unseated.*.goal",
@@ -233,9 +274,9 @@ const SCORECARD_V2: &[&str] = &[
     "unattributed.wip_at_end",
 ];
 
-/// The board's text columns under schema 2, which the hook's line labels
-/// its cells with.
-const COLUMNS_V2: &[&str] = &[
+/// The board's text columns under schema 3, which the hook's line labels
+/// its cells with (schema 2's, and `state`).
+const COLUMNS_V3: &[&str] = &[
     "seat",
     "goal",
     "budget",
@@ -246,6 +287,7 @@ const COLUMNS_V2: &[&str] = &[
     "since-land",
     "verdict",
     "findings",
+    "state",
     "flags",
 ];
 
@@ -253,6 +295,7 @@ const COLUMNS_V2: &[&str] = &[
 fn recorded(what: &str, schema: &Value) -> &'static [&'static str] {
     match (what, schema.as_u64()) {
         ("board", Some(2)) => BOARD_V2,
+        ("board", Some(3)) => BOARD_V3,
         ("scorecard", Some(2)) => SCORECARD_V2,
         (_, n) => panic!(
             "{what} schema {n:?} has no recorded fields; record them here and in .design/2026-10-19-output-contract.md"
@@ -281,7 +324,7 @@ fn json_fields_change_only_with_the_schema_number() {
 fn the_hooks_labels_are_the_boards_columns() {
     let names: Vec<&str> = andon::render::BOARD.iter().map(|c| c.name).collect();
     assert_eq!(
-        names, COLUMNS_V2,
+        names, COLUMNS_V3,
         "the board's columns (and the hook line's labels) changed: move the board's schema"
     );
 }

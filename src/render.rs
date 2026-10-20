@@ -547,6 +547,20 @@ pub const BOARD: &[Column<Row>] = &[
         cell: |r, _| count(&r.findings),
     },
     Column {
+        name: "state",
+        help: "the seat's live session now and for how long: busy (a turn runs) or idle (waiting for a prompt); — when none runs.",
+        cell: |r, now| {
+            r.state.as_ref().map_or_else(String::new, |g| {
+                g.cell(|s| {
+                    s.as_ref().map_or_else(
+                        || "—".to_owned(),
+                        |s| format!("{} {}", s.status, age(s.since, now)),
+                    )
+                })
+            })
+        },
+    },
+    Column {
         name: "flags",
         help: "what needs acting on, below.",
         cell: |r, _| r.flags.join(" · "),
@@ -556,12 +570,15 @@ pub const BOARD: &[Column<Row>] = &[
 /// The columns a goal schema adds; without `[goal]` the board has none.
 const GOAL_COLUMNS: &[&str] = &["goal", "budget"];
 
-/// The board's columns under a config: all, or without the goal schema's.
+/// The board's columns: all, or without the goal schema's when no `[goal]`
+/// applies, and without `state` when no row read live sessions.
 #[must_use]
-pub fn board_columns(goal_schema: bool) -> Vec<Column<Row>> {
+pub fn board_columns(goal_schema: bool, rows: &[Row]) -> Vec<Column<Row>> {
+    let presence = rows.iter().any(|r| r.state.is_some());
     BOARD
         .iter()
         .filter(|c| goal_schema || !GOAL_COLUMNS.contains(&c.name))
+        .filter(|c| presence || c.name != "state")
         .copied()
         .collect()
 }
@@ -572,10 +589,14 @@ pub fn board_header() -> Vec<String> {
     BOARD.iter().map(|c| c.name.to_owned()).collect()
 }
 
-/// One seat's row as cells.
+/// One seat's row as cells: every column, but `state` only where live
+/// sessions were read.
 #[must_use]
 pub fn board_row(row: &Row, now: Timestamp) -> Vec<String> {
-    BOARD.iter().map(|c| (c.cell)(row, now)).collect()
+    board_columns(true, std::slice::from_ref(row))
+        .iter()
+        .map(|c| (c.cell)(row, now))
+        .collect()
 }
 
 /// `board --help`, from the columns and flags declared once.
@@ -604,7 +625,7 @@ pub fn board(board: &Board) -> String {
         board.window_hours
     );
     out.push_str(&grid(
-        &board_columns(board.goal_schema),
+        &board_columns(board.goal_schema, &board.seats),
         &board.seats,
         board.asof,
     ));

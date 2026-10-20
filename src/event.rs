@@ -41,6 +41,8 @@ pub enum Kind {
     SessionActive,
     /// A session started a subagent.
     Spawn,
+    /// A harness session running now, with its status since it last changed.
+    Presence,
     /// What a source let andon see: a span it covers, or a gap it could not
     /// read (see `.design/2026-10-14-coverage.md`).
     Coverage,
@@ -66,6 +68,7 @@ impl Kind {
             Self::Close => "close",
             Self::SessionActive => "session_active",
             Self::Spawn => "spawn",
+            Self::Presence => "presence",
             Self::Coverage => "coverage",
             Self::Other(name) => name,
         }
@@ -88,6 +91,7 @@ impl Kind {
             "close" => Self::Close,
             "session_active" => Self::SessionActive,
             "spawn" => Self::Spawn,
+            "presence" => Self::Presence,
             "coverage" => Self::Coverage,
             other if other.starts_with("other:") => Self::Other(other.to_owned()),
             other => Self::Other(format!("other:{other}")),
@@ -318,6 +322,9 @@ pub mod attr {
         REVIEWER = "reviewer", Text;
         /// The runner's own reason for a run's ending, verbatim.
         RUN_REASON = "run_reason", Text;
+        /// A live session's state as its harness records it (`busy`, `idle`;
+        /// `live` where it records none).
+        STATUS = "status", Text;
         /// A commit subject, an item or pull request title.
         TITLE = "title", Text;
         /// A message's recipients, verbatim.
