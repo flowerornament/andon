@@ -298,11 +298,28 @@ const COLUMNS_V3: &[&str] = &[
     "flags",
 ];
 
+/// The board's text columns under schema 4: schema 3's, renamed to read
+/// without the help (`last` is `landed`, `since-land` is `unlanded`,
+/// `findings` is `comments`); its JSON fields are schema 3's.
+const COLUMNS_V4: &[&str] = &[
+    "seat", "goal", "budget", "lands", "landed", "runs", "pass", "unlanded", "verdict", "comments",
+    "state", "flags",
+];
+
+/// The board's text columns for its schema number.
+fn columns(schema: &Value) -> &'static [&'static str] {
+    match schema.as_u64() {
+        Some(3) => COLUMNS_V3,
+        Some(4) => COLUMNS_V4,
+        n => panic!("board schema {n:?} has no recorded columns; record them here"),
+    }
+}
+
 /// The recorded fields for an output's schema number.
 fn recorded(what: &str, schema: &Value) -> &'static [&'static str] {
     match (what, schema.as_u64()) {
         ("board", Some(2)) => BOARD_V2,
-        ("board", Some(3)) => BOARD_V3,
+        ("board", Some(3 | 4)) => BOARD_V3,
         ("scorecard", Some(2)) => SCORECARD_V2,
         (_, n) => panic!(
             "{what} schema {n:?} has no recorded fields; record them here and in .design/2026-10-19-output-contract.md"
@@ -330,8 +347,10 @@ fn json_fields_change_only_with_the_schema_number() {
 #[test]
 fn the_hooks_labels_are_the_boards_columns() {
     let names: Vec<&str> = andon::render::BOARD.iter().map(|c| c.name).collect();
+    let (b, _) = outputs();
     assert_eq!(
-        names, COLUMNS_V3,
+        names,
+        columns(&b["schema"]),
         "the board's columns (and the hook line's labels) changed: move the board's schema"
     );
 }

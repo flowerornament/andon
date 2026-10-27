@@ -141,3 +141,16 @@ closed, reopened and closed again counts once, as branching (items spawned
 per item closed) needs. Before bd's events were read, no source could
 record a second close, so no earlier output changes, and the scorecard
 stays at schema 2.
+
+## Amendment: board schema 4 (2026-10-27, andon-tlz)
+
+The board's text columns are renamed to read without the help
+(`.design/2026-10-27-first-class-interface.md` §6): `last` is `landed`,
+`since-land` is `unlanded`, `findings` is `comments`. The hook's line
+labels its cells with them, so the board moves to schema 4. No JSON field
+changes; schema 4's fields are schema 3's. Ages in text read `19h ago`.
+The overlap flag in `flags[]` reads `overlaps <seat>, <seat> (N files)`,
+one flag for all the seats a row overlaps; `overlaps[]` still lists every
+path. The scorecard's text columns `no-reason`, `goal%` and
+`asks-no-goal` are now `unexplained`, `on-goal` and `asks-off-goal`; its
+text is unversioned and its JSON stays at schema 2.

@@ -366,7 +366,7 @@ pub fn board_of(p: &Projection<'_>, asof: Timestamp) -> Board {
             .collect()
     };
     Board {
-        schema: 3,
+        schema: 4,
         asof,
         window_hours,
         goal_schema: config.goal_schema(),

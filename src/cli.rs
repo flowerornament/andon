@@ -32,8 +32,33 @@ pub struct Cli {
     /// Read a kept ledger (from `andon ledger`) instead of the sources.
     #[arg(long, global = true, value_name = "FILE")]
     pub ledger: Option<PathBuf>,
+    /// Color: auto (on a terminal, unless `NO_COLOR` is set), always or never.
+    #[arg(long, global = true, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
+    pub color: Color,
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// When text output is painted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Color {
+    Auto,
+    Always,
+    Never,
+}
+
+/// How this invocation's text is shown: the reader's zone and terminal,
+/// and `--color`.
+fn display(cli: &Cli) -> render::Display {
+    let auto = render::Display::local();
+    render::Display {
+        color: match cli.color {
+            Color::Auto => auto.color,
+            Color::Always => true,
+            Color::Never => false,
+        },
+        ..auto
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -149,35 +174,12 @@ pub fn main() -> ExitCode {
 /// # Errors
 /// When andon cannot decide: missing config, unreadable source, bad input.
 pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
+    let shown = |all: bool| render::Display {
+        all,
+        ..display(cli)
+    };
     match &cli.command {
-        Command::Hook { check } => {
-            let mut input = String::new();
-            let _ = io::Read::read_to_string(&mut io::stdin(), &mut input);
-            if *check {
-                let (report, ok) = crate::hook::check(&sources(cli), &input, clock());
-                out.write_all(report.as_bytes())?;
-                return Ok(if ok {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::from(1)
-                });
-            }
-            match crate::hook::run(&sources(cli), &input, clock()) {
-                // a hook must never break the session: a write error, like any
-                // other, is explained on stderr and the hook exits 0
-                Ok(text) => {
-                    if let Err(error) = out.write_all(text.as_bytes()) {
-                        eprintln!("andon hook: {error}");
-                    }
-                }
-                // say so, in one line the agent sees, but never fail the
-                // session (an exit of 2 would block the prompt)
-                Err(error) => {
-                    let _ = writeln!(out, "andon: hook cannot decide: {error:#}");
-                }
-            }
-            Ok(ExitCode::SUCCESS)
-        }
+        Command::Hook { check } => hook(cli, *check, out),
         Command::Check { what } => {
             let now = clock();
             let config = load_config(cli, now)?;
@@ -220,7 +222,15 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
-            show_board(out, &ledger, &config, now, seat.as_deref(), *all, *json)
+            show_board(
+                out,
+                &ledger,
+                &config,
+                now,
+                seat.as_deref(),
+                &shown(*all),
+                *json,
+            )
         }
         Command::Asof {
             when,
@@ -233,7 +243,15 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             let ledger = load_ledger(cli, &config)?;
             // a date is its end; a moment not yet come is now
             let asof = endpoint_in(when, now, &TimeZone::system(), true)?.min(now);
-            show_board(out, &ledger, &config, asof, seat.as_deref(), *all, *json)
+            show_board(
+                out,
+                &ledger,
+                &config,
+                asof,
+                seat.as_deref(),
+                &shown(*all),
+                *json,
+            )
         }
         Command::Scorecard { window, json } => {
             // `now` closes an open window; read before the sources, which then
@@ -247,11 +265,42 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
                 serde_json::to_writer_pretty(&mut *out, &card)?;
                 out.write_all(b"\n")?;
             } else {
-                out.write_all(render::scorecard_in(&card, &render::Display::local()).as_bytes())?;
+                out.write_all(render::scorecard_in(&card, &display(cli)).as_bytes())?;
             }
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// `andon hook`: the seat's row and what changed, or with `--check` the
+/// wiring; a hook never fails the session.
+fn hook(cli: &Cli, check: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let mut input = String::new();
+    let _ = io::Read::read_to_string(&mut io::stdin(), &mut input);
+    if check {
+        let (report, ok) = crate::hook::check(&sources(cli), &input, clock());
+        out.write_all(report.as_bytes())?;
+        return Ok(if ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        });
+    }
+    match crate::hook::run(&sources(cli), &input, clock()) {
+        // a hook must never break the session: a write error, like any
+        // other, is explained on stderr and the hook exits 0
+        Ok(text) => {
+            if let Err(error) = out.write_all(text.as_bytes()) {
+                eprintln!("andon hook: {error}");
+            }
+        }
+        // say so, in one line the agent sees, but never fail the
+        // session (an exit of 2 would block the prompt)
+        Err(error) => {
+            let _ = writeln!(out, "andon: hook cannot decide: {error:#}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn check(
@@ -351,7 +400,7 @@ fn show_board(
     config: &Config,
     asof: Timestamp,
     seat: Option<&str>,
-    all: bool,
+    display: &render::Display,
     json: bool,
 ) -> Result<ExitCode> {
     let mut board = fold::board::board(ledger, config, asof);
@@ -369,8 +418,8 @@ fn show_board(
     } else {
         let display = render::Display {
             // a seat asked for by name is shown, quiet or not
-            all: all || seat.is_some(),
-            ..render::Display::local()
+            all: display.all || seat.is_some(),
+            ..display.clone()
         };
         out.write_all(render::board_in(&board, &display).as_bytes())?;
     }

@@ -217,6 +217,54 @@ fn asof_a_date_is_its_end_in_the_readers_zone() {
     );
 }
 
+#[test]
+fn color_is_painted_only_when_asked_or_on_a_terminal_and_never_into_json() {
+    let dir = empty_project("[seats.andon-1b]\n");
+    std::fs::write(
+        dir.path().join("l.jsonl"),
+        concat!(
+            r#"{"t":"2026-10-13T10:00:00Z","actor":"andon-1b","seat":"andon-1b","kind":"land","ids":{"commit":"abc"},"outcome":"pass","source":"test"}"#,
+            "\n"
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let run = |args: &[&str]| {
+        let mut all = vec!["--ledger", "l.jsonl"];
+        all.extend(args);
+        stdout(&andon(&all, dir.path()))
+    };
+    let painted = |text: &str| text.contains('\x1b');
+    // a pipe is not a terminal: plain
+    assert!(!painted(&run(&["asof", "2026-10-13T12:00:00Z"])));
+    assert!(!painted(&run(&["scorecard", "2026-10-13"])));
+    // asked for: painted, but never JSON
+    assert!(painted(&run(&[
+        "--color",
+        "always",
+        "asof",
+        "2026-10-13T12:00:00Z"
+    ])));
+    assert!(painted(&run(&[
+        "--color",
+        "always",
+        "scorecard",
+        "2026-10-13"
+    ])));
+    assert!(!painted(&run(&[
+        "--color",
+        "always",
+        "asof",
+        "2026-10-13T12:00:00Z",
+        "--json"
+    ])));
+    assert!(!painted(&run(&[
+        "--color",
+        "never",
+        "asof",
+        "2026-10-13T12:00:00Z"
+    ])));
+}
+
 fn hook_with(args: &[&str], dir: &Path, payload: &str) -> Output {
     use std::io::Write;
     let mut child = Command::new(env!("CARGO_BIN_EXE_andon"))

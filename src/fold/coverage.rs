@@ -275,7 +275,7 @@ pub fn noun(kind: &str) -> &str {
         "close" => "closes",
         "session_active" => "sessions",
         "presence" | "state:presence" => "live sessions",
-        "other:comment" => "findings",
+        "other:comment" => "comments",
         "state:create" | "state:claim" | "state:close" => "goal states",
         other => other,
     }

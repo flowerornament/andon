@@ -4,6 +4,18 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- The board reads at a glance (`.design/2026-10-27-first-class-interface.md`
+  §6). On a terminal, flags are red (over budget, a refused land, idle
+  while holding) or yellow (WIP, a stall, an overlap), each flagged seat's
+  name in its loudest flag's color, `?` and `—` dim and headers bold;
+  `--color auto|always|never`, and `NO_COLOR` is honored. Piped output and
+  `--json` are never painted. Columns renamed: board `last` → `landed`,
+  `since-land` → `unlanded`, `findings` → `comments`; scorecard
+  `no-reason` → `unexplained`, `goal%` → `on-goal`, `asks-no-goal` →
+  `asks-off-goal`; budgets in agent-hours read `agent-h`. Ages read `19h
+  ago`. The board moves to schema 4 (the hook's labels; no JSON field
+  changes).
+
 - The board fits the terminal (`.design/2026-10-27-first-class-interface.md`
   §1). On a terminal (or with `COLUMNS` set) no line of `board`, `asof` or
   `scorecard` passes its width: flags that do not fit go beneath the

@@ -86,6 +86,10 @@ pub struct Display {
     pub width: Option<usize>,
     /// Show every seat, the quiet ones too (`--all`, `--seat`).
     pub all: bool,
+    /// Paint with ANSI color: on a terminal, unless `NO_COLOR` is set or
+    /// `--color` says otherwise. Painted after layout, so width never counts
+    /// an escape code.
+    pub color: bool,
 }
 
 impl Display {
@@ -96,6 +100,7 @@ impl Display {
             zone: TimeZone::UTC,
             width: None,
             all: false,
+            color: false,
         }
     }
 
@@ -110,6 +115,19 @@ impl Display {
             zone: TimeZone::system(),
             width: columns.or_else(terminal).filter(|w| *w >= 20),
             all: false,
+            color: auto_color(
+                std::io::IsTerminal::is_terminal(&std::io::stdout()),
+                std::env::var_os("NO_COLOR").as_deref(),
+            ),
+        }
+    }
+
+    /// `text` in an SGR style when painting, else as it is.
+    fn paint(&self, style: Style, text: &str) -> String {
+        if self.color && !text.is_empty() {
+            format!("\x1b[{}m{text}\x1b[0m", style.code())
+        } else {
+            text.to_owned()
         }
     }
 
@@ -128,6 +146,100 @@ impl Display {
             .strftime("%Y-%m-%d %H:%M")
             .to_string()
     }
+}
+
+/// Whether to paint by default: only on a terminal, and never where
+/// `NO_COLOR` is set to anything (<https://no-color.org>).
+#[must_use]
+pub fn auto_color(terminal: bool, no_color: Option<&std::ffi::OsStr>) -> bool {
+    terminal && no_color.is_none_or(std::ffi::OsStr::is_empty)
+}
+
+/// What a painted span means; each maps to one SGR code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Style {
+    Dim,
+    Bold,
+    /// Wants attention: WIP, a stall, an overlap.
+    Warn,
+    /// Wants acting on now: over budget, a refused land, idle while holding.
+    Alarm,
+}
+
+impl Style {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::Dim => "2",
+            Self::Bold => "1",
+            Self::Warn => "33",
+            Self::Alarm => "31",
+        }
+    }
+}
+
+/// How loud a flag is.
+fn flag_style(flag: &str) -> Style {
+    if flag.starts_with("over budget")
+        || flag.starts_with("last land refused")
+        || flag.starts_with("idle ")
+    {
+        Style::Alarm
+    } else {
+        Style::Warn
+    }
+}
+
+/// The table's lines painted: the header bold, each flagged seat's name and
+/// flags in their flag's color, every `?` and `—` dim.
+fn paint_table(table: &str, rows: &[&Row], display: &Display) -> String {
+    if !display.color {
+        return table.to_owned();
+    }
+    let mut out = String::new();
+    for (i, line) in table.lines().enumerate() {
+        if i == 0 {
+            let _ = writeln!(out, "{}", display.paint(Style::Bold, line));
+            continue;
+        }
+        let row = rows.get(i - 1);
+        let mut painted = dim_marks(line, display);
+        if let Some(row) = row {
+            for flag in &row.flags {
+                painted =
+                    painted.replacen(flag.as_str(), &display.paint(flag_style(flag), flag), 1);
+            }
+            if let Some(loudest) = row.flags.iter().map(|f| flag_style(f)).max() {
+                painted =
+                    painted.replacen(row.seat.as_str(), &display.paint(loudest, &row.seat), 1);
+            }
+        }
+        let _ = writeln!(out, "{painted}");
+    }
+    out
+}
+
+/// `line` with each standalone `?` and `—` dimmed.
+fn dim_marks(line: &str, display: &Display) -> String {
+    let mut out = String::new();
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if word == "?" || word == "—" {
+            out.push_str(&display.paint(Style::Dim, word));
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in line.chars() {
+        if c == ' ' {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
 }
 
 /// A span as a person says it: `1 day`, `3 days`, `7d 6h`, `5h 30m`, `40m`.
@@ -151,6 +263,15 @@ pub fn short_time(t: Timestamp) -> String {
     t.to_zoned(TimeZone::UTC)
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
+}
+
+/// An age as said: `40m ago`, `5h ago`, `3d ago`.
+#[must_use]
+pub fn ago(t: Timestamp, now: Timestamp) -> String {
+    match age(t, now).as_str() {
+        "future" => "future".to_owned(),
+        a => format!("{a} ago"),
+    }
 }
 
 /// An age relative to `now`: `40m`, `5h`, `3d`.
@@ -226,7 +347,7 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
         cell: |c, _| c.runs.cell(|r| r.fail.to_string()),
     },
     Column {
-        name: "no-reason",
+        name: "unexplained",
         right: true,
         help: "failed runs that kept neither a reason nor an output tail.",
         cell: |c, _| c.runs.cell(|r| r.fail_without_reason.to_string()),
@@ -262,7 +383,7 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
         cell: |c, _| count(&c.messages_received),
     },
     Column {
-        name: "goal%",
+        name: "on-goal",
         right: true,
         help: "the share of sent messages that name a goal.",
         cell: |c, _| {
@@ -272,7 +393,7 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
         },
     },
     Column {
-        name: "asks-no-goal",
+        name: "asks-off-goal",
         right: true,
         help: "decision messages sent (`[messages] decision_kinds`) that name no goal.",
         cell: |c, _| count(&c.decisions_without_goal),
@@ -319,14 +440,16 @@ pub fn scorecard(card: &Scorecard) -> String {
 /// The scorecard as text, for `display`.
 #[must_use]
 pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "scorecard {} .. {} ({})\n",
-        display.bare_time(card.from),
-        display.time(card.to),
-        span(card.from, card.to)
+    let mut out = display.paint(
+        Style::Bold,
+        &format!(
+            "scorecard {} .. {} ({})",
+            display.bare_time(card.from),
+            display.time(card.to),
+            span(card.from, card.to)
+        ),
     );
+    out.push_str("\n\n");
     if let Some(asked) = card.asked_to {
         let _ = writeln!(
             out,
@@ -342,13 +465,15 @@ pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
         .chain([&card.unattributed, &card.total])
         .collect();
     let idle = card.seats.len() + 2 - shown.len();
-    out.push_str(&stacked(
-        SCORECARD,
-        SCORECARD_GROUPS,
-        &shown,
-        card.to,
-        display.width,
-    ));
+    let tables = stacked(SCORECARD, SCORECARD_GROUPS, &shown, card.to, display.width);
+    for line in tables.lines() {
+        let painted = if line.starts_with("seat ") {
+            display.paint(Style::Bold, line)
+        } else {
+            dim_marks(line, display)
+        };
+        let _ = writeln!(out, "{painted}");
+    }
     if idle > 0 {
         let _ = writeln!(
             out,
@@ -358,8 +483,17 @@ pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
     out.push('\n');
 
     for line in summary(card).lines() {
-        let indent = if line.starts_with("? ") { 2 } else { 9 };
-        let _ = writeln!(out, "{}", wrap(line, display.width, indent));
+        let reason = line.starts_with("? ");
+        let text = wrap(line, display.width, if reason { 2 } else { 9 });
+        let _ = writeln!(
+            out,
+            "{}",
+            if reason {
+                display.paint(Style::Dim, &text)
+            } else {
+                text
+            }
+        );
     }
     out
 }
@@ -547,15 +681,16 @@ fn gauge_column(path: &str) -> &str {
     match path.split('.').next().unwrap_or(path) {
         "goals" => "goal",
         "landings" => "lands",
-        "last_land" => "last",
+        "last_land" => "landed",
         "runs_pass" => "pass",
-        "runs_since_land" => "since-land",
+        "runs_since_land" => "unlanded",
+        "findings" => "comments",
         "last_verdict" => "verdict",
         "overlaps" => "flags",
         "messages_sent" => "sent",
         "messages_received" => "recv",
-        "messages_naming_goal" => "goal%",
-        "decisions_without_goal" => "asks-no-goal",
+        "messages_naming_goal" => "on-goal",
+        "decisions_without_goal" => "asks-off-goal",
         "items_created" => "created",
         "wip_at_end" => "wip",
         "active_hours" => "active-h",
@@ -568,7 +703,7 @@ fn gauge_column(path: &str) -> &str {
 
 fn unit_short(unit: &str) -> &str {
     match unit {
-        "agent-hours" => "ah",
+        "agent-hours" => "agent-h",
         "wall-clock" => "h",
         "minutes" => "min",
         other => other,
@@ -624,7 +759,7 @@ pub fn wrap(text: &str, width: Option<usize>, indent: usize) -> String {
     let mut out = String::new();
     let (mut len, mut fresh) = (0, true);
     for word in text.split(' ') {
-        let n = word.chars().count();
+        let n = visible(word);
         if !fresh && len + 1 + n > width {
             out.push('\n');
             out.push_str(&" ".repeat(indent));
@@ -638,6 +773,22 @@ pub fn wrap(text: &str, width: Option<usize>, indent: usize) -> String {
         fresh = false;
     }
     out
+}
+
+/// How many columns `text` takes on a terminal: its chars, less any ANSI
+/// escape sequence.
+fn visible(text: &str) -> usize {
+    let mut n = 0;
+    let mut escape = false;
+    for c in text.chars() {
+        match (escape, c) {
+            (false, '\x1b') => escape = true,
+            (true, 'm') => escape = false,
+            (true, _) => {}
+            (false, _) => n += 1,
+        }
+    }
+    n
 }
 
 /// `items` after `lead`, as many as fit `width`, then `+N`; with no width,
@@ -739,7 +890,7 @@ fn verdict_cell(row: &Row, now: Timestamp) -> String {
                 format!(
                     "{} {}",
                     v.outcome.map_or("verdict", |o| o.as_str()).to_uppercase(),
-                    age(v.t, now)
+                    ago(v.t, now)
                 )
             },
         )
@@ -773,12 +924,12 @@ pub const BOARD: &[Column<Row>] = &[
         cell: |r, _| count(&r.landings),
     },
     Column {
-        name: "last",
+        name: "landed",
         right: true,
         help: "how long ago the seat last landed.",
         cell: |r, now| {
             r.last_land
-                .cell(|l| l.map_or_else(|| "—".to_owned(), |t| age(t, now)))
+                .cell(|l| l.map_or_else(|| "—".to_owned(), |t| ago(t, now)))
         },
     },
     Column {
@@ -794,7 +945,7 @@ pub const BOARD: &[Column<Row>] = &[
         cell: |r, _| both(&r.runs_pass, &r.runs, |p, n| percent(*p, *n)),
     },
     Column {
-        name: "since-land",
+        name: "unlanded",
         right: true,
         help: "runs since the seat's last landing (with none, since landings are first read).",
         cell: |r, _| count(&r.runs_since_land),
@@ -806,9 +957,9 @@ pub const BOARD: &[Column<Row>] = &[
         cell: verdict_cell,
     },
     Column {
-        name: "findings",
+        name: "comments",
         right: true,
-        help: "comments on the lead goal since it was claimed.",
+        help: "comments on the lead goal since it was claimed (its findings).",
         cell: |r, _| count(&r.findings),
     },
     Column {
@@ -891,7 +1042,7 @@ pub fn board(board: &Board) -> String {
 
 /// Columns the board gives up, in this order, when it cannot fit its
 /// width any other way.
-const BOARD_DROPS: &[&str] = &["findings", "since-land", "pass", "last", "state", "budget"];
+const BOARD_DROPS: &[&str] = &["comments", "unlanded", "pass", "landed", "state", "budget"];
 
 /// A seat with nothing to show: no goal (where the board shows goals),
 /// nothing landed or run in the window, no flag, no turn running. Unknown
@@ -915,11 +1066,15 @@ fn quiet(row: &Row, goal_schema: bool) -> bool {
 #[must_use]
 pub fn board_in(board: &Board, display: &Display) -> String {
     let width = display.width;
-    let mut out = format!(
-        "board as of {} · counts over the last {}h\n\n",
-        display.time(board.asof),
-        board.window_hours
+    let mut out = display.paint(
+        Style::Bold,
+        &format!(
+            "board as of {} · counts over the last {}h",
+            display.time(board.asof),
+            board.window_hours
+        ),
     );
+    out.push_str("\n\n");
     let (shown, folded): (Vec<&Row>, Vec<&Row>) = board
         .seats
         .iter()
@@ -939,9 +1094,9 @@ pub fn board_in(board: &Board, display: &Display) -> String {
     let mut columns = board_columns(board.goal_schema, &board.seats);
     let unsourced = unsourced(&mut columns, &shown, &mut entries);
     let (table, flags_beneath, dropped) = fitted(columns, &shown, board.asof, width);
-    out.push_str(&table);
+    out.push_str(&paint_table(&table, &shown, display));
     if flags_beneath {
-        out.push_str(&flags_list(&shown, width));
+        out.push_str(&flags_list(&shown, display));
     }
     if !dropped.is_empty() {
         let note = format!(
@@ -949,7 +1104,11 @@ pub fn board_in(board: &Board, display: &Display) -> String {
             width.unwrap_or_default(),
             dropped.join(", ")
         );
-        let _ = writeln!(out, "\n{}", wrap(&note, width, 1));
+        let _ = writeln!(
+            out,
+            "\n{}",
+            display.paint(Style::Dim, &wrap(&note, width, 1))
+        );
     }
     if !folded.is_empty() {
         let names: Vec<String> = folded.iter().map(|r| r.seat.clone()).collect();
@@ -959,27 +1118,28 @@ pub fn board_in(board: &Board, display: &Display) -> String {
             if n == 1 { "seat" } else { "seats" },
             if n == 1 { "it" } else { "them" }
         );
-        let _ = writeln!(out, "\n{}", fit_list(&lead, &names, width, 6));
-    }
-    out.push_str(&overlapping(&shown, width));
-    if !unsourced.is_empty() {
         let _ = writeln!(
             out,
             "\n{}",
-            wrap(
-                &format!("not shown, no source reads them: {}", unsourced.join(", ")),
-                width,
-                2
-            )
+            display.paint(Style::Dim, &fit_list(&lead, &names, width, 6))
+        );
+    }
+    out.push_str(&overlapping(&shown, display));
+    if !unsourced.is_empty() {
+        let note = format!("not shown, no source reads them: {}", unsourced.join(", "));
+        let _ = writeln!(
+            out,
+            "\n{}",
+            display.paint(Style::Dim, &wrap(&note, width, 2))
         );
     }
     if !entries.is_empty() {
         out.push('\n');
         for line in reasons(&entries).lines() {
-            let _ = writeln!(out, "{}", wrap(line, width, 2));
+            let _ = writeln!(out, "{}", display.paint(Style::Dim, &wrap(line, width, 2)));
         }
     }
-    out.push_str(&unseated(board, width));
+    out.push_str(&unseated(board, display));
     out
 }
 
@@ -1042,7 +1202,7 @@ fn fitted(
 }
 
 /// Each flagged seat's flags, one seat to a line, wrapped under the table.
-fn flags_list(shown: &[&Row], width: Option<usize>) -> String {
+fn flags_list(shown: &[&Row], display: &Display) -> String {
     let flagged: Vec<&&Row> = shown.iter().filter(|r| !r.flags.is_empty()).collect();
     if flagged.is_empty() {
         return String::new();
@@ -1052,17 +1212,30 @@ fn flags_list(shown: &[&Row], width: Option<usize>) -> String {
         .map(|r| r.seat.chars().count())
         .max()
         .unwrap_or(0);
-    let mut out = String::from("\nflags\n");
+    let mut out = format!("\n{}\n", display.paint(Style::Bold, "flags"));
     for row in flagged {
-        let line = format!("  {:<pad$}  {}", row.seat, row.flags.join(" · "));
-        let _ = writeln!(out, "{}", wrap(&line, width, pad + 4));
+        let loudest = row
+            .flags
+            .iter()
+            .map(|f| flag_style(f))
+            .max()
+            .unwrap_or(Style::Warn);
+        let flags: Vec<String> = row
+            .flags
+            .iter()
+            .map(|f| display.paint(flag_style(f), f))
+            .collect();
+        let seat = format!("{:<pad$}", row.seat);
+        let line = format!("  {}  {}", display.paint(loudest, &seat), flags.join(" · "));
+        let _ = writeln!(out, "{}", wrap(&line, display.width, pad + 4));
     }
     out
 }
 
 /// The unlanded files seats' workspaces share: each set of files once,
 /// with every seat that holds it, as many paths as fit.
-fn overlapping(rows: &[&Row], width: Option<usize>) -> String {
+fn overlapping(rows: &[&Row], display: &Display) -> String {
+    let width = display.width;
     let mut sets: BTreeMap<&[String], Vec<&str>> = BTreeMap::new();
     for row in rows {
         for o in row.overlaps.get().into_iter().flatten() {
@@ -1090,7 +1263,10 @@ fn overlapping(rows: &[&Row], width: Option<usize>) -> String {
         .map(|(who, _)| who.chars().count())
         .max()
         .unwrap_or(0);
-    let mut out = String::from("\nunlanded files shared by workspaces\n");
+    let mut out = format!(
+        "\n{}\n",
+        display.paint(Style::Bold, "unlanded files shared by workspaces")
+    );
     for (who, files) in lines {
         let who = if width.is_some_and(|w| pad + 24 > w) {
             // too many seats to share a line with paths: they get their own
@@ -1115,7 +1291,7 @@ fn overlapping(rows: &[&Row], width: Option<usize>) -> String {
 
 /// Goals no row shows, claimed by an identity that is no seat: one line per
 /// identity, with how many and the fix (`--json` lists every goal).
-fn unseated(board: &Board, width: Option<usize>) -> String {
+fn unseated(board: &Board, display: &Display) -> String {
     let mut by_owner: BTreeMap<&str, Vec<&crate::fold::board::Unseated>> = BTreeMap::new();
     for u in board.unseated.get().into_iter().flatten() {
         by_owner.entry(u.owner.as_str()).or_default().push(u);
@@ -1139,7 +1315,7 @@ fn unseated(board: &Board, width: Option<usize>) -> String {
             ),
             [] => continue,
         };
-        out.push_str(&wrap(&line, width, 2));
+        out.push_str(&display.paint(Style::Warn, &wrap(&line, display.width, 2)));
         out.push('\n');
     }
     out
@@ -1161,6 +1337,15 @@ mod tests {
             table(&rows),
             "seat       runs  flags\nx-seat-2b   479  479 runs since last landing\nx             —\n"
         );
+    }
+
+    #[test]
+    fn color_is_for_a_terminal_without_no_color() {
+        use std::ffi::OsStr;
+        assert!(auto_color(true, None));
+        assert!(auto_color(true, Some(OsStr::new(""))));
+        assert!(!auto_color(true, Some(OsStr::new("1"))));
+        assert!(!auto_color(false, None));
     }
 
     #[test]
