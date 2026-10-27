@@ -232,7 +232,7 @@ impl Coverage {
         let earliest = spans[0];
         if earliest.from > from {
             Some(format!(
-                "{names} are read from {} ({})",
+                "{names} are read from {} ({}), after this count starts; an earlier since in that adapter covers it",
                 day(earliest.from),
                 earliest.source
             ))
@@ -321,7 +321,9 @@ mod tests {
                 at("2026-10-06T00:00:00Z")
             )
             .as_deref(),
-            Some("landings are read from 2026-10-09 00:00 UTC (jj)")
+            Some(
+                "landings are read from 2026-10-09 00:00 UTC (jj), after this count starts; an earlier since in that adapter covers it"
+            )
         );
         assert_eq!(
             c.check(

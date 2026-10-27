@@ -27,6 +27,31 @@ fn budget(g: &Listed) -> String {
     }
 }
 
+/// A kind as a reader names it: `comment`, not `other:comment`.
+fn kind(name: &str) -> &str {
+    name.strip_prefix("other:").unwrap_or(name)
+}
+
+/// `path` with the home directory written `~`.
+fn home(path: &str) -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .and_then(|h| path.strip_prefix(&h).map(|rest| format!("~{rest}")))
+        .unwrap_or_else(|| path.to_owned())
+}
+
+/// `text` cut from the left to `max` characters, starting with `…` when
+/// cut: a path keeps the end that tells it apart.
+fn cut_left(text: &str, max: usize) -> String {
+    let n = text.chars().count();
+    if n <= max {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().skip(n + 1 - max.max(1)).collect();
+    format!("…{kept}")
+}
+
 /// `text` cut to `max` characters, ending in `…` when cut.
 fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
@@ -143,7 +168,7 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
         let joined: Vec<String> = s
             .joined
             .iter()
-            .map(|(kind, n)| format!("{n} {kind}"))
+            .map(|(k, n)| format!("{n} {}", kind(k)))
             .collect();
         rows.push(vec![
             s.seat.clone(),
@@ -156,7 +181,7 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
                 || "—".to_owned(),
                 |p| format!("{} {}", p.status, render::age(p.since, now)),
             ),
-            s.workspace.clone().unwrap_or_else(|| "—".to_owned()),
+            s.workspace.as_deref().map_or_else(|| "—".to_owned(), home),
             if joined.is_empty() {
                 "—".to_owned()
             } else {
@@ -164,13 +189,33 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
             },
         ]);
     }
+    if let Some(width) = display.width {
+        // a workspace path gives way before what joined, down to its tail
+        let widest = |rows: &[Vec<String>]| {
+            (0..5)
+                .map(|i| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0) + 2)
+                .sum::<usize>()
+        };
+        let over = widest(&rows).saturating_sub(width + 2);
+        let path = rows.iter().map(|r| r[3].chars().count()).max().unwrap_or(0);
+        let keep = path.saturating_sub(over).max(24);
+        for row in rows.iter_mut().skip(1) {
+            row[3] = cut_left(&row[3], keep);
+        }
+    }
     out.push_str(&fitted(rows, &[false; 5], display.width));
-    if !roster.unseated.is_empty() {
+    // a name with only messages is a correspondent from elsewhere, not a
+    // seat's name gone astray
+    let (letters, strays): (Vec<_>, Vec<_>) = roster
+        .unseated
+        .iter()
+        .partition(|id| id.facts.keys().all(|k| k == "message"));
+    if !strays.is_empty() {
         let _ = writeln!(
             out,
             "\nnames the sources recorded that join no seat, most facts first:"
         );
-        let mut names: Vec<_> = roster.unseated.iter().collect();
+        let mut names = strays;
         names.sort_by_key(|id| {
             (
                 std::cmp::Reverse(id.facts.values().sum::<usize>()),
@@ -181,7 +226,7 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
             let facts: Vec<String> = id
                 .facts
                 .iter()
-                .map(|(kind, n)| format!("{n} {kind}"))
+                .map(|(k, n)| format!("{n} {}", kind(k)))
                 .collect();
             let line = format!("  {}: {}", id.identity, facts.join(", "));
             out.push_str(&render::wrap(&line, display.width, 4));
@@ -189,6 +234,17 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
         }
         let fix = "fix: add each name to the aliases of the seat it is ([seats.<seat>] aliases), or make its tool record a seat's name";
         out.push_str(&render::wrap(fix, display.width, 2));
+        out.push('\n');
+    }
+    if !letters.is_empty() {
+        let names: Vec<&str> = letters.iter().map(|id| id.identity.as_str()).collect();
+        let line = format!(
+            "\nmessages from {} name{} outside this project's seats: {}",
+            names.len(),
+            if names.len() == 1 { "" } else { "s" },
+            names.join(", ")
+        );
+        out.push_str(&render::wrap(&line, display.width, 2));
         out.push('\n');
     }
     out

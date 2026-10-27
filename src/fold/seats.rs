@@ -105,13 +105,19 @@ pub fn roster(ledger: &Ledger, config: &Config, asof: Timestamp) -> Roster {
 
 /// Every name the sources recorded as an actor or an assignee that joins
 /// to no seat, with how many facts carry it; none when no seats are
-/// configured (every name is then its own seat).
+/// configured (every name is then its own seat). Presence is left out: it
+/// reads every session on the machine, and one running in another project
+/// is no name to join.
 fn unseated(ledger: &Ledger, config: &Config) -> Vec<Identity> {
     if config.seats.is_empty() {
         return Vec::new();
     }
     let mut seen: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
-    for e in ledger.events().iter().filter(|e| e.kind != Kind::Coverage) {
+    for e in ledger
+        .events()
+        .iter()
+        .filter(|e| !matches!(e.kind, Kind::Coverage | Kind::Presence))
+    {
         if e.seat.is_none()
             && let Some(actor) = e.actor.as_deref().filter(|a| !a.is_empty())
         {

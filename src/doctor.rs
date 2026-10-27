@@ -73,7 +73,11 @@ pub fn doctor(
     );
     let _ = writeln!(out, "\nhook, for a session starting in {}:", cwd.display());
     for line in report.lines() {
-        let _ = writeln!(out, "  {line}");
+        let _ = writeln!(
+            out,
+            "{}",
+            render::wrap(&format!("  {line}"), display.width, 10)
+        );
     }
     match failed.first() {
         None => {

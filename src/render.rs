@@ -440,22 +440,32 @@ pub fn scorecard(card: &Scorecard) -> String {
 /// The scorecard as text, for `display`.
 #[must_use]
 pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
+    // a window that runs on past now, by less than a day, is counted so
+    // far; one cut short by more says what it asked for
+    let soon = card
+        .asked_to
+        .is_some_and(|asked| asked.duration_since(card.to) <= jiff::SignedDuration::from_hours(24));
     let mut out = display.paint(
         Style::Bold,
         &format!(
-            "scorecard {} .. {} ({})",
+            "scorecard {} .. {} ({}{})",
             display.bare_time(card.from),
             display.time(card.to),
-            span(card.from, card.to)
+            span(card.from, card.to),
+            if soon { " so far" } else { "" }
         ),
     );
     out.push_str("\n\n");
-    if let Some(asked) = card.asked_to {
-        let _ = writeln!(
-            out,
-            "counted to {}, when the sources were read; the window asked for ends {}\n",
+    if let Some(asked) = card.asked_to.filter(|_| !soon) {
+        let note = format!(
+            "counted to {}, when the sources were read; the window asked for ends {}",
             display.time(card.to),
             display.time(asked)
+        );
+        let _ = writeln!(
+            out,
+            "{}\n",
+            display.paint(Style::Dim, &wrap(&note, display.width, 2))
         );
     }
     let shown: Vec<&SeatCard> = card
