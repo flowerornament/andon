@@ -332,6 +332,7 @@ fn lists() -> (Value, Value) {
     );
     let at = parse_instant("2026-10-13T12:00:00Z").unwrap_or_else(|e| panic!("{e}"));
     let ask = andon::fold::goals::Ask {
+        open: true,
         all: true,
         seat: None,
     };
@@ -361,6 +362,29 @@ const GOALS_V1: &[&str] = &[
     "goals.*.unit",
     "goals.*.used",
     "schema",
+];
+
+/// `andon goals --json`, schema 2: schema 1 and the count of open goals no one holds.
+const GOALS_V2: &[&str] = &[
+    "asof",
+    "assigned",
+    "goals",
+    "goals.*",
+    "goals.*.amount",
+    "goals.*.budget",
+    "goals.*.claimed_at",
+    "goals.*.closed_at",
+    "goals.*.created_at",
+    "goals.*.id",
+    "goals.*.item_type",
+    "goals.*.owner",
+    "goals.*.seated",
+    "goals.*.status",
+    "goals.*.title",
+    "goals.*.unit",
+    "goals.*.used",
+    "schema",
+    "unheld",
 ];
 
 /// `andon seats --json`, schema 1.
@@ -395,6 +419,7 @@ fn recorded(what: &str, schema: &Value) -> &'static [&'static str] {
         ("board", Some(3 | 4)) => BOARD_V3,
         ("scorecard", Some(2)) => SCORECARD_V2,
         ("goals", Some(1)) => GOALS_V1,
+        ("goals", Some(2)) => GOALS_V2,
         ("seats", Some(1)) => SEATS_V1,
         (_, n) => panic!(
             "{what} schema {n:?} has no recorded fields; record them here and in .design/2026-10-19-output-contract.md"

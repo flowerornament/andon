@@ -129,6 +129,17 @@ fn init_detects_a_jj_and_bd_repository() {
     assert!(config.adapters.bd.is_some(), "{text}");
 }
 
+/// The goal ids of a goals table: each row's first word, up to the blank
+/// line beneath the table.
+fn ids(table: &str) -> Vec<&str> {
+    table
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter_map(|l| l.split_whitespace().next())
+        .collect()
+}
+
 #[test]
 fn goals_and_seats_are_plain_on_a_pipe() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -140,6 +151,7 @@ fn goals_and_seats_are_plain_on_a_pipe() {
         r#"{"t":"2026-10-13T07:20:00Z","kind":"create","subject":"x-old","ids":{"goal":"x-old"},"source":"t","attrs":{"title":"done"}}"#,
         r#"{"t":"2026-10-13T07:30:00Z","kind":"close","subject":"x-old","ids":{"goal":"x-old"},"source":"t"}"#,
         r#"{"t":"2026-10-13T08:30:00Z","kind":"claim","actor":"Shared User","subject":"x-ghi","ids":{"goal":"x-ghi"},"source":"t"}"#,
+        r#"{"t":"2026-10-13T07:40:00Z","kind":"create","subject":"x-jkl","ids":{"goal":"x-jkl"},"source":"t","attrs":{"title":"assigned, not claimed","assignee":"x-1b"}}"#,
     ]
     .join("\n");
     std::fs::write(dir.path().join("ledger.jsonl"), ledger + "\n")
@@ -150,21 +162,47 @@ fn goals_and_seats_are_plain_on_a_pipe() {
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let goals = stdout(&andon(dir.path(), &["--ledger", "ledger.jsonl", "goals"]));
-    let ids: Vec<&str> = goals
-        .lines()
-        .skip(1)
-        .filter_map(|l| l.split_whitespace().next())
-        .collect();
-    // claimed first, newest claim first; then open; closed only with --all
-    assert_eq!(&ids[..3], ["x-ghi", "x-abc", "x-def"], "{goals}");
-    assert!(!goals.contains("x-old"), "{goals}");
-    assert!(goals.contains("Shared User*"), "{goals}");
+    // held goals only, newest claim first, then the count of the rest
+    assert_eq!(ids(&goals), ["x-ghi", "x-abc"], "{goals}");
+    assert!(
+        goals.ends_with("\n2 open goals no one holds, 1 of them assigned (--open lists them)\n"),
+        "{goals}"
+    );
+    assert!(goals.contains("* Shared User (1) is no seat"), "{goals}");
     assert!(!goals.contains('\x1b'), "no color on a pipe: {goals}");
+    // --open adds the unheld, newest first, and drops the count line
+    let open = stdout(&andon(
+        dir.path(),
+        &["--ledger", "ledger.jsonl", "goals", "--open"],
+    ));
+    assert_eq!(ids(&open), ["x-ghi", "x-abc", "x-jkl", "x-def"], "{open}");
+    assert!(!open.contains("no one holds"), "{open}");
+    // --all adds the closed
     let all = stdout(&andon(
         dir.path(),
         &["--ledger", "ledger.jsonl", "goals", "--all"],
     ));
-    assert!(all.contains("x-old"), "{all}");
+    assert_eq!(
+        ids(&all),
+        ["x-ghi", "x-abc", "x-jkl", "x-def", "x-old"],
+        "{all}"
+    );
+    // --json honors the same filters
+    for (flags, n) in [(&[][..], 2), (&["--open"][..], 4), (&["--all"][..], 5)] {
+        let args: Vec<&str> = ["--ledger", "ledger.jsonl", "goals", "--json"]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .collect();
+        let json: serde_json::Value = serde_json::from_str(&stdout(&andon(dir.path(), &args)))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            json["goals"].as_array().map(Vec::len),
+            Some(n),
+            "{flags:?}: {json}"
+        );
+        assert_eq!(json["unheld"], 2, "{json}");
+        assert_eq!(json["assigned"], 1, "{json}");
+    }
     let mine = stdout(&andon(
         dir.path(),
         &["--ledger", "ledger.jsonl", "goals", "--seat", "x-1a"],

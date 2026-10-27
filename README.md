@@ -62,7 +62,7 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
 | `andon check goal ID` | The goal has its sections, a done-when that can fail, a finite budget, and room in its pool. |
 | `andon check message KIND` | A decision names the goal it serves. |
 | `andon hook` | The seat's row for a harness hook. Never fails a session. |
-| `andon goals [--seat S] [--all] [--json]` | The goals: open ones by default, who holds each (a name that is no seat is marked `*`), claimed or not, budget spent of allowed, and how long since the claim. |
+| `andon goals [--seat S] [--open] [--all] [--json]` | The goals someone holds: who holds each (a name that is no seat is marked `*`), budget spent of allowed, and how long since the claim, then a count of the open goals no one holds. `--open` lists those too, `--all` the closed ones as well. |
 | `andon seats [--json]` | The roster: each seat's aliases and prefixes, where it works, its live session and what joined to it in the window; then every name the sources recorded that joins no seat, with the fix. |
 | `andon doctor` | What each configured source read: its events, the span it covers, its gaps and its time, or its whole error; then the hook's wiring. Exits 1, naming the fix, when a source cannot be read. |
 | `andon ledger` | Every event as JSONL, to keep; `--ledger FILE` reads it back instead of the sources. |

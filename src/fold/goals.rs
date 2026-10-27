@@ -1,6 +1,6 @@
 //! `andon goals`: the tracker's goals as of an instant, one row each: who
 //! holds it, whether it is claimed, and the budget spent of what it allows.
-//! Its JSON is its own contract, schema 1 (`tests/schema.rs`).
+//! Its JSON is its own contract, schema 2 (`tests/schema.rs`).
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -12,7 +12,7 @@ use crate::fold::projection::Projection;
 use crate::ledger::Ledger;
 
 /// The list's schema number.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// The goals: the tracker's state at the instant.
 pub const GOALS: Spec = Spec::new(Scope::Board, "goals", TRACKER, Span::State);
@@ -23,6 +23,10 @@ pub struct Goals {
     pub schema: u32,
     pub asof: Timestamp,
     pub goals: Gauge<Vec<Listed>>,
+    /// Open goals no one has claimed, listed or not, and how many of those
+    /// are assigned; `None` when the goals are not known.
+    pub unheld: Option<usize>,
+    pub assigned: Option<usize>,
 }
 
 /// One goal.
@@ -52,58 +56,69 @@ pub struct Listed {
 /// What to list.
 #[derive(Debug, Clone, Default)]
 pub struct Ask<'a> {
-    /// Closed goals too.
+    /// The open goals no one holds too.
+    pub open: bool,
+    /// Those and the closed goals too.
     pub all: bool,
     /// Only the goals this seat (or identity) holds.
     pub seat: Option<&'a str>,
 }
 
-/// The goals as of `asof`: claimed first, newest claim first; then open,
+/// The goals as of `asof`: the held ones (claimed, with an owner), newest
+/// claim first; then (with `open`) the open ones no one has claimed,
 /// newest first; then (with `all`) closed, newest close first.
 #[must_use]
 pub fn goals(ledger: &Ledger, config: &Config, asof: Timestamp, ask: &Ask<'_>) -> Goals {
     let ledger = ledger.prefix(asof);
     let p = Projection::new(&ledger, config);
     let g = board::gauger(&p, asof);
-    let mut listed: Vec<Listed> =
-        p.index
-            .items_at(asof)
-            .into_iter()
-            .filter(|(_, i)| ask.all || !i.closed)
-            .filter(|(_, i)| ask.seat.is_none_or(|s| i.owner.as_deref() == Some(s)))
-            .map(|(id, item)| {
-                let status = if item.closed {
-                    "closed"
-                } else if item.claimed {
-                    "claimed"
-                } else {
-                    "open"
-                };
-                let seated = item
-                    .owner
-                    .as_deref()
-                    .is_some_and(|o| config.seats.is_empty() || config.seats.contains_key(o));
-                let spent: Option<Goal> =
-                    item.owner.as_deref().filter(|_| item.claimed).map(|owner| {
-                        board::goal_of(&g, owner, &id, &item, p.events(owner), config)
-                    });
-                Listed {
-                    title: item.title.clone(),
-                    status,
-                    owner: item.owner.clone(),
-                    seated,
-                    item_type: item.item_type.clone(),
-                    created_at: item.created,
-                    claimed_at: item.claimed_at,
-                    closed_at: item.closed_at,
-                    budget: item.budget,
-                    amount: spent.as_ref().and_then(|s| s.amount),
-                    unit: spent.as_ref().map(|s| s.used_unit.clone()),
-                    used: spent.map(|s| s.used),
-                    id,
-                }
-            })
-            .collect();
+    let items = p.index.items_at(asof);
+    let held = |i: &crate::fold::Item| i.claimed && i.owner.is_some();
+    let (unheld, assigned) = items
+        .values()
+        .filter(|i| !i.closed && !held(i))
+        .fold((0, 0), |(n, k), i| {
+            (n + 1, k + usize::from(i.owner.is_some()))
+        });
+    let mut listed: Vec<Listed> = items
+        .into_iter()
+        .filter(|(_, i)| ask.all || !i.closed)
+        .filter(|(_, i)| ask.all || ask.open || held(i))
+        .filter(|(_, i)| ask.seat.is_none_or(|s| i.owner.as_deref() == Some(s)))
+        .map(|(id, item)| {
+            let status = if item.closed {
+                "closed"
+            } else if item.claimed {
+                "claimed"
+            } else {
+                "open"
+            };
+            let seated = item
+                .owner
+                .as_deref()
+                .is_some_and(|o| config.seats.is_empty() || config.seats.contains_key(o));
+            let spent: Option<Goal> = item
+                .owner
+                .as_deref()
+                .filter(|_| item.claimed)
+                .map(|owner| board::goal_of(&g, owner, &id, &item, p.events(owner), config));
+            Listed {
+                title: item.title.clone(),
+                status,
+                owner: item.owner.clone(),
+                seated,
+                item_type: item.item_type.clone(),
+                created_at: item.created,
+                claimed_at: item.claimed_at,
+                closed_at: item.closed_at,
+                budget: item.budget,
+                amount: spent.as_ref().and_then(|s| s.amount),
+                unit: spent.as_ref().map(|s| s.used_unit.clone()),
+                used: spent.map(|s| s.used),
+                id,
+            }
+        })
+        .collect();
     listed.sort_by(|a, b| {
         let rank = |l: &Listed| match l.status {
             "claimed" => 0,
@@ -116,9 +131,12 @@ pub fn goals(ledger: &Ledger, config: &Config, asof: Timestamp, ask: &Ask<'_>) -
             .then_with(|| when(b).cmp(&when(a)))
             .then_with(|| a.id.cmp(&b.id))
     });
+    let goals = g.gauge(&GOALS, None, None, listed);
     Goals {
         schema: SCHEMA,
         asof,
-        goals: g.gauge(&GOALS, None, None, listed),
+        unheld: goals.get().map(|_| unheld),
+        assigned: goals.get().map(|_| assigned),
+        goals,
     }
 }

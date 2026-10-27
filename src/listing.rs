@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use crate::fold::goals::{Goals, Listed};
+use crate::fold::goals::{Ask, Goals, Listed};
 use crate::fold::seats::Roster;
 use crate::render::{self, Display};
 
@@ -80,9 +80,53 @@ fn fitted(mut rows: Vec<Vec<String>>, right: &[bool], width: Option<usize>) -> S
     render::aligned(&rows, right)
 }
 
+/// The line beneath a list that leaves out the goals no one holds.
+fn unheld(list: &Goals, ask: &Ask<'_>) -> Option<String> {
+    let n = list.unheld.filter(|n| *n > 0)?;
+    if ask.open || ask.all || ask.seat.is_some() {
+        return None;
+    }
+    let goals = if n == 1 { "goal" } else { "goals" };
+    let assigned = match list.assigned.unwrap_or(0) {
+        0 => String::new(),
+        k => format!(", {k} of them assigned"),
+    };
+    Some(format!(
+        "{n} open {goals} no one holds{assigned} (--open lists them)\n"
+    ))
+}
+
+/// The footnote for owners that are no seat, naming each with its count.
+fn unseated(goals: &[Listed]) -> Option<String> {
+    let mut held: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for g in goals.iter().filter(|g| !g.seated) {
+        if let Some(owner) = g.owner.as_deref() {
+            *held.entry(owner).or_default() += 1;
+        }
+    }
+    if held.is_empty() {
+        return None;
+    }
+    let mut held: Vec<_> = held.into_iter().collect();
+    held.sort_by_key(|(owner, n)| (std::cmp::Reverse(*n), *owner));
+    let names: Vec<String> = held
+        .iter()
+        .map(|(owner, n)| format!("{owner} ({n})"))
+        .collect();
+    let is = if names.len() == 1 {
+        "is no seat"
+    } else {
+        "are no seats"
+    };
+    Some(format!(
+        "* {} {is}; `andon seats` names the fix",
+        names.join(", ")
+    ))
+}
+
 /// `andon goals` as text.
 #[must_use]
-pub fn goals(list: &Goals, display: &Display) -> String {
+pub fn goals(list: &Goals, ask: &Ask<'_>, display: &Display) -> String {
     let now = list.asof;
     let Some(goals) = list.goals.get() else {
         return format!(
@@ -91,7 +135,12 @@ pub fn goals(list: &Goals, display: &Display) -> String {
         );
     };
     if goals.is_empty() {
-        return "no goals\n".to_owned();
+        let none = if ask.open || ask.all {
+            "no goals\n"
+        } else {
+            "no goals held\n"
+        };
+        return none.to_owned() + &unheld(list, ask).unwrap_or_default();
     }
     let mut rows = vec![
         ["goal", "owner", "status", "budget", "claimed", "title"]
@@ -140,8 +189,14 @@ pub fn goals(list: &Goals, display: &Display) -> String {
         out.push_str(&render::wrap(&line, display.width, 2));
         out.push('\n');
     }
-    if goals.iter().any(|g| g.owner.is_some() && !g.seated) {
-        out.push_str("\n* not a seat: `andon seats` names the fix\n");
+    if let Some(note) = unseated(goals) {
+        out.push('\n');
+        out.push_str(&render::wrap(&note, display.width, 2));
+        out.push('\n');
+    }
+    if let Some(line) = unheld(list, ask) {
+        out.push('\n');
+        out.push_str(&line);
     }
     out
 }

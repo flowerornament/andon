@@ -174,3 +174,14 @@ its own `schema: 1`. `tests/schema.rs` records their fields.
 
 `andon doctor` is text for people, not a contract; its exit code is: 0
 when every configured source reads, 1 naming the fix otherwise.
+
+## Amendment: goals schema 2 (2026-10-27, andon-9ci)
+
+`andon goals --json` lists the held goals by default, `--open` adds the
+open goals no one has claimed and `--all` the closed ones too. Schema 2
+adds two top-level fields:
+
+- `unheld`: the open goals no one has claimed, whether listed or not.
+- `assigned`: how many of those are assigned to someone.
+
+Both are `null` when the goals are not known. The entries are unchanged.

@@ -219,3 +219,24 @@ parsing. Whoever lands second rebases.
 - **What cannot get there.** The hook is bound by `bd export` (1.4 to
   2.2 s warm on murail and herald). That is bd's own query over the whole
   tracker, and no cheaper read gives the same state.
+
+## Amendment: goals lists the held ones by default (2026-10-27, andon-9ci)
+
+§5 had `andon goals` list every open goal. On the largest tracker read in
+acceptance that is 1,202 rows, 1,132 of them open goals nobody has claimed, which buries the answer to
+the list's own question: who is holding what.
+
+- **With no flags,** the list holds only the goals someone holds (claimed,
+  with an owner), newest claim first. One line beneath counts the rest:
+  `1132 open goals no one holds, 126 of them assigned (--open lists them)`.
+  The line is left out when there are none, and under `--seat`.
+- **`--open`** adds the open goals no one has claimed, newest first. A goal
+  assigned but not claimed is one of these: an assignment names an owner,
+  not a seat at work on it.
+- **`--all`** adds the closed goals as well.
+- **`--json`** honors the same filters and gains `unheld` and `assigned`,
+  the two counts; goals is schema 2.
+- **The footnote names each owner that is no seat,** with how many goals it
+  holds: `* Shared User (57) is no seat; andon seats names the fix`.
+
+On that tracker the default list is 77 lines.

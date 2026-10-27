@@ -181,19 +181,22 @@ pub enum Command {
         #[arg(long, allow_hyphen_values = true)]
         since: Option<String>,
     },
-    /// The goals: open ones by default, who holds each, budget spent of
-    /// allowed, and how long since the claim.
+    /// The goals someone holds, who holds each, budget spent of allowed,
+    /// and how long since the claim; then how many open goals no one holds.
     #[command(
-        after_help = "Examples:\n  andon goals\n  andon goals --seat proj-1a\n  andon goals --all --json | jq '.goals[].id'"
+        after_help = "Examples:\n  andon goals\n  andon goals --open\n  andon goals --seat proj-1a\n  andon goals --all --json | jq '.goals[].id'"
     )]
     Goals {
         /// Only the goals this seat (or identity) holds.
         #[arg(long)]
         seat: Option<String>,
-        /// Closed goals too.
+        /// The open goals no one holds too.
+        #[arg(long)]
+        open: bool,
+        /// Open and closed goals: every goal.
         #[arg(long)]
         all: bool,
-        /// The list as JSON (schema 1).
+        /// The list as JSON (schema 2).
         #[arg(long)]
         json: bool,
     },
@@ -325,7 +328,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             })
         }
         Command::Init => init(out),
-        Command::Goals { seat, all, json } => goals(cli, out, seat.as_deref(), *all, *json),
+        goals_ @ Command::Goals { .. } => goals(cli, out, goals_),
         Command::Seats { json } => seats(cli, out, *json),
         Command::Doctor => doctor(cli, out),
         Command::Ledger { since } => {
@@ -604,21 +607,30 @@ fn init(out: &mut dyn Write) -> Result<ExitCode> {
 }
 
 /// `andon goals`.
-fn goals(
-    cli: &Cli,
-    out: &mut dyn Write,
-    seat: Option<&str>,
-    all: bool,
-    json: bool,
-) -> Result<ExitCode> {
+fn goals(cli: &Cli, out: &mut dyn Write, command: &Command) -> Result<ExitCode> {
+    let Command::Goals {
+        seat,
+        open,
+        all,
+        json,
+    } = command
+    else {
+        unreachable!("goals runs only for `andon goals`")
+    };
+    let (open, all, json) = (*open, *all, *json);
+    let ask = &fold::goals::Ask {
+        open,
+        all,
+        seat: seat.as_deref(),
+    };
     let now = clock();
     let config = load_config(cli, now)?;
     let ledger = load_ledger(cli, &config)?;
-    let list = fold::goals::goals(&ledger, &config, now, &fold::goals::Ask { all, seat });
+    let list = fold::goals::goals(&ledger, &config, now, ask);
     if json {
         writeln!(out, "{}", serde_json::to_string(&list)?)?;
     } else {
-        out.write_all(crate::listing::goals(&list, &display(cli)).as_bytes())?;
+        out.write_all(crate::listing::goals(&list, ask, &display(cli)).as_bytes())?;
     }
     Ok(ExitCode::SUCCESS)
 }
