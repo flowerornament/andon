@@ -45,12 +45,18 @@ pub fn collect(config: &Config, bc: &BdConfig) -> Result<Vec<Event>> {
             dir.display()
         );
     }
-    let out = run_tool_in(
-        &dir,
-        "bd",
-        &["export"],
-        "install bd, or remove [adapters.bd] from andon.toml",
-    )?;
+    // the export and the events table are separate reads: run them at once
+    let (out, rows) = std::thread::scope(|s| {
+        let rows = s.spawn(|| bc.events.then(|| event_rows(&dir)).flatten());
+        let out = run_tool_in(
+            &dir,
+            "bd",
+            &["export"],
+            "install bd, or remove [adapters.bd] from andon.toml",
+        );
+        (out, rows.join().ok().flatten())
+    });
+    let out = out?;
     let since = bc.since.as_deref().map(parse_instant).transpose()?;
     let source = format!("bd export ({})", dir.display());
     let mut events = Vec::new();
@@ -102,9 +108,7 @@ pub fn collect(config: &Config, bc: &BdConfig) -> Result<Vec<Event>> {
             None,
         ));
     }
-    if bc.events
-        && let Some(rows) = event_rows(&dir)
-    {
+    if let Some(rows) = rows {
         with_history(&mut events, &rows, &current, bc, &source, since, now)?;
     }
     Ok(events)
@@ -278,8 +282,10 @@ const STATE: [&str; 5] = [
 const HISTORY: &[&str] = &["claim", "close", "reopen", "assign"];
 
 /// One row of bd's events table, with only what andon reads.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Row {
+    #[serde(default)]
+    pub id: String,
     pub issue_id: String,
     pub event_type: String,
     #[serde(default)]
@@ -298,15 +304,66 @@ pub struct Row {
 
 /// The rows andon reads, from `bd sql`; `None` where bd cannot serve SQL
 /// (an embedded database) or the read fails, and the export stands alone.
+///
+/// Rows are never rewritten, only added (or pruned): the rows read before
+/// are kept, and only the ids not seen yet are fetched. Filtering the
+/// table's long texts is what costs, so it is done once per row.
 fn event_rows(dir: &Path) -> Option<Vec<Row>> {
-    const QUERY: &str = "SELECT issue_id, event_type, actor, new_value, created_at, \
+    const FIELDS: &str = "SELECT id, issue_id, event_type, actor, new_value, created_at, \
         CASE WHEN old_value LIKE '{%' THEN JSON_UNQUOTE(JSON_EXTRACT(old_value, '$.assignee')) END AS old_assignee, \
-        (old_value LIKE '{%') AS old_known FROM events \
-        WHERE event_type IN ('created', 'claimed', 'closed', 'reopened') \
-        OR (event_type IN ('updated', 'status_changed') AND new_value LIKE '%\"assignee\"%')";
-    let out = run_tool_in(dir, "bd", &["sql", "--json", QUERY], "install bd").ok()?;
-    serde_json::from_str(&out).ok()
+        (old_value LIKE '{%') AS old_known FROM events";
+    const WANTED: &str = "(event_type IN ('created', 'claimed', 'closed', 'reopened') \
+        OR (event_type IN ('updated', 'status_changed') AND new_value LIKE '%\"assignee\"%'))";
+    #[derive(serde::Deserialize)]
+    struct Id {
+        id: String,
+    }
+    let sql = |query: &str| run_tool_in(dir, "bd", &["sql", "--json", query], "install bd").ok();
+    let ids: Vec<Id> = serde_json::from_str(&sql(
+        "SELECT id FROM events WHERE event_type IN ('created', 'claimed', 'closed', 'reopened', 'updated', 'status_changed')",
+    )?)
+    .ok()?;
+    let key = std::fs::canonicalize(dir)
+        .map_or_else(|_| dir.display().to_string(), |p| p.display().to_string());
+    // each id seen, with its row when it is one andon reads
+    let mut kept: HashMap<String, Option<Row>> =
+        crate::adapters::cache::load(ROWS_CACHE, &key).unwrap_or_default();
+    let new: Vec<&str> = ids
+        .iter()
+        .map(|i| i.id.as_str())
+        .filter(|id| !kept.contains_key(*id))
+        .collect();
+    for chunk in new.chunks(500) {
+        let list = chunk
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows: Vec<Row> = serde_json::from_str(&sql(&format!(
+            "{FIELDS} WHERE {WANTED} AND id IN ({list})"
+        ))?)
+        .ok()?;
+        for id in chunk {
+            kept.insert((*id).to_owned(), None);
+        }
+        for row in rows {
+            kept.insert(row.id.clone(), Some(row));
+        }
+    }
+    // a pruned row is gone from the table, so from the read
+    let present: std::collections::HashSet<&str> = ids.iter().map(|i| i.id.as_str()).collect();
+    kept.retain(|id, _| present.contains(id.as_str()));
+    if !new.is_empty() {
+        crate::adapters::cache::store(ROWS_CACHE, &key, &kept);
+    }
+    let mut rows: Vec<Row> = kept.into_values().flatten().collect();
+    // the table's own order is no order: read them in a stable one
+    rows.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
+    Some(rows)
 }
+
+/// Where the rows read before are kept.
+const ROWS_CACHE: &str = "bd-events-v1";
 
 /// Each issue's own timestamps, which calibrate the rows: when it was
 /// created, and when it was last closed.
@@ -914,6 +971,7 @@ mod tests {
 
     fn row(issue: &str, kind: &str, at: &str) -> Row {
         Row {
+            id: format!("{issue}-{kind}-{at}"),
             issue_id: issue.into(),
             event_type: kind.into(),
             actor: None,

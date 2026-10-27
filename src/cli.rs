@@ -69,6 +69,10 @@ pub struct Cli {
         help_heading = "Global options"
     )]
     pub color: Color,
+    /// After the output, print each source's read time and event count to
+    /// stderr.
+    #[arg(long, global = true, help_heading = "Global options")]
+    pub timings: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -231,8 +235,18 @@ pub fn main() -> ExitCode {
         Err(_) if std::env::args().nth(1).as_deref() == Some("hook") => return ExitCode::SUCCESS,
         Err(error) => error.exit(),
     };
+    // progress and timings go to stderr only, and the line only to a
+    // terminal (never into a hook's output, whose stderr a harness may show)
+    let hook = matches!(cli.command, Some(Command::Hook { .. }));
+    let line = !hook
+        && (io::IsTerminal::is_terminal(&io::stderr())
+            || std::env::var_os("ANDON_PROGRESS").is_some_and(|v| v == "1"));
+    adapters::progress::configure(adapters::progress::Options {
+        line,
+        timings: cli.timings,
+    });
     let mut stdout = io::stdout().lock();
-    match run(&cli, &mut stdout) {
+    let code = match run(&cli, &mut stdout) {
         Ok(code) => code,
         Err(error) => {
             // one line on stdout (stdout is the API), the whole chain on it,
@@ -240,7 +254,15 @@ pub fn main() -> ExitCode {
             let _ = writeln!(stdout, "andon: cannot decide: {error:#}");
             ExitCode::from(2)
         }
+    };
+    if cli.timings {
+        let _ = stdout.flush();
+        eprint!(
+            "{}",
+            adapters::progress::timings_text(&adapters::progress::take_timings())
+        );
     }
+    code
 }
 
 /// Run a parsed command, writing its output to `out`.

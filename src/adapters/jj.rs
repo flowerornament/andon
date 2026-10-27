@@ -44,8 +44,12 @@ pub struct Signature {
     pub timestamp: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct JjOp {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub parents: Vec<String>,
     pub time: OpTime,
     pub description: String,
     #[serde(default)]
@@ -54,7 +58,7 @@ pub struct JjOp {
     pub attributes: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct OpTime {
     pub start: String,
 }
@@ -79,17 +83,40 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
         .transpose()?
         .map(|s| format!(" & committer_date(after:{:?})", crate::time::read_from(s)))
         .unwrap_or_default();
-    // the root commit is jj's empty origin, not a landing
-    let landed = log(
-        &dir,
-        &format!("first_ancestors({}) ~ root(){date}", jc.trunk),
-    )?;
-    let unlanded = log(
-        &dir,
-        &format!("~::{} & ~empty() & mutable(){date}", jc.trunk),
-    )?;
     let since_t = jc.since.as_deref().map(parse_instant).transpose()?;
-    let ops = op_log(&dir, since_t)?;
+    // the reads are independent: each is its own jj, run at once
+    let (landed, unlanded, ops, held) = std::thread::scope(|s| {
+        let dir = &dir;
+        let date = &date;
+        // the root commit is jj's empty origin, not a landing
+        let landed = s.spawn(move || {
+            log(
+                dir,
+                &format!("first_ancestors({}) ~ root(){date}", jc.trunk),
+            )
+        });
+        let unlanded = s.spawn(move || {
+            log(
+                dir,
+                &format!("~::{} & ~empty() & mutable(){date}", jc.trunk),
+            )
+        });
+        let ops = s.spawn(move || op_log(dir, since_t));
+        let held = s.spawn(move || held(dir, &jc.trunk));
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<Vec<JjCommit>>>| {
+            h.join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("a jj read stopped unexpectedly")))
+        };
+        (
+            join(landed),
+            join(unlanded),
+            ops.join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("a jj read stopped unexpectedly"))),
+            held.join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("a jj read stopped unexpectedly"))),
+        )
+    });
+    let (landed, unlanded, ops, held) = (landed?, unlanded?, ops?, held?);
     let goal = config.goal_regex()?;
     let source = format!("jj -R {}", repo.display());
     let since = jc.since.as_deref().map(parse_instant).transpose()?;
@@ -106,7 +133,7 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
     // what this read covers: the trunk's landings and change starts from
     // `since` (or all history) to now, the instant of capture
     let now = config.capture()?;
-    out.extend(workspaces(&dir, &jc.trunk, &ops, &source, now)?);
+    out.extend(workspaces(held, &ops, &source, now));
     out.push(crate::event::coverage(
         since.unwrap_or(crate::event::ALL_HISTORY),
         Some(now),
@@ -122,23 +149,17 @@ pub fn collect(config: &Config, jc: &JjConfig) -> Result<Vec<Event>> {
 /// commit in that range touching it. Covered at the instant for every seat;
 /// a workspace that cannot be read is a gap there, since an overlap needs
 /// every workspace.
-fn workspaces(
-    repo: &Repo<'_>,
-    trunk: &str,
-    ops: &[JjOp],
-    source: &str,
-    now: Timestamp,
-) -> Result<Vec<Event>> {
-    let listed = jj(repo, &["workspace", "list", "-T", "name ++ \"\\n\""])?;
+fn workspaces(held: Held, ops: &[JjOp], source: &str, now: Timestamp) -> Vec<Event> {
     let mut out = Vec::new();
-    for name in listed.lines().map(str::trim).filter(|n| !n.is_empty()) {
+    for (name, files) in held {
+        let name = name.as_str();
         // ops are newest first: the first naming the workspace is its last
         // snapshot (or any command run there)
         let snapshot = ops
             .iter()
             .find(|op| op.workspace_name.as_deref() == Some(name))
             .map(|op| op.time.start.clone());
-        match unlanded(repo, trunk, name) {
+        match files {
             Ok(files) => {
                 for (path, changed) in files {
                     let mut e = Event::new(changed.unwrap_or(now).min(now), Kind::Unlanded, source);
@@ -168,7 +189,38 @@ fn workspaces(
         source,
         None,
     ));
-    Ok(out)
+    out
+}
+
+/// Each workspace, with the files it holds unlanded (or why they could
+/// not be read), each with when it last changed.
+type Held = Vec<(String, Result<Vec<(String, Option<Timestamp>)>>)>;
+
+/// Every workspace, in jj's order, with the files it holds unlanded (each
+/// read at once).
+fn held(repo: &Repo<'_>, trunk: &str) -> Result<Held> {
+    let listed = jj(repo, &["workspace", "list", "-T", "name ++ \"\\n\""])?;
+    let names: Vec<&str> = listed
+        .lines()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect();
+    Ok(std::thread::scope(|s| {
+        let handles: Vec<_> = names
+            .iter()
+            .map(|name| s.spawn(move || unlanded(repo, trunk, name)))
+            .collect();
+        names
+            .iter()
+            .zip(handles)
+            .map(|(name, h)| {
+                let files = h
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("a jj read stopped unexpectedly")));
+                ((*name).to_owned(), files)
+            })
+            .collect()
+    }))
 }
 
 /// The files `workspace` changed since it forked from `trunk`, net (a
@@ -395,8 +447,27 @@ fn log(repo: &Repo<'_>, revset: &str) -> Result<Vec<JjCommit>> {
 /// before it: older operations cannot time a landing in the window, and the
 /// two days keep the trunk move before it, which the batch rule needs.
 fn op_log(repo: &Repo<'_>, since: Option<Timestamp>) -> Result<Vec<JjOp>> {
+    use std::collections::HashSet;
     use std::io::BufRead;
     let dir = repo.dir.to_string_lossy();
+    let cutoff = since.and_then(|s| s.checked_sub(SignedDuration::from_hours(48)).ok());
+    // operations are immutable: those read before are kept, and the log is
+    // read only back to where the kept ones begin
+    let key = std::fs::canonicalize(repo.dir)
+        .map_or_else(|_| dir.to_string(), |p| p.display().to_string());
+    let kept: Option<KeptOps> =
+        crate::adapters::cache::load(OPS_CACHE, &key).filter(|k: &KeptOps| {
+            match (k.floor, cutoff) {
+                (None, _) => true,
+                (Some(floor), Some(c)) => floor <= c,
+                (Some(_), None) => false,
+            }
+        });
+    let by_id: HashMap<&str, &JjOp> = kept
+        .iter()
+        .flat_map(|k| &k.ops)
+        .map(|op| (op.id.as_str(), op))
+        .collect();
     let mut child = crate::adapters::command("jj", std::path::Path::new("."))
         .args([
             "--ignore-working-copy",
@@ -411,9 +482,12 @@ fn op_log(repo: &Repo<'_>, since: Option<Timestamp>) -> Result<Vec<JjOp>> {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| anyhow::anyhow!("cannot run jj ({e}); {FIX}"))?;
-    let cutoff = since.and_then(|s| s.checked_sub(SignedDuration::from_hours(48)).ok());
     let mut ops = Vec::new();
+    let mut read: HashSet<String> = HashSet::new();
+    // operations named as parents and not yet read
+    let mut pending: HashSet<String> = HashSet::from([repo.op.to_owned()]);
     let mut stopped = false;
+    let mut hit = false;
     if let Some(out) = child.stdout.take() {
         for line in std::io::BufReader::new(out).lines() {
             let line = line?;
@@ -427,29 +501,116 @@ fn op_log(repo: &Repo<'_>, since: Option<Timestamp>) -> Result<Vec<JjOp>> {
                 stopped = true;
                 break;
             }
-            ops.push(op);
+            // every operation still owed is kept: the rest of the log is
+            if by_id.contains_key(op.id.as_str())
+                && pending.iter().all(|p| by_id.contains_key(p.as_str()))
+            {
+                hit = true;
+                break;
+            }
+            pending.remove(&op.id);
+            read.insert(op.id.clone());
+            for parent in &op.parents {
+                if !read.contains(parent) {
+                    pending.insert(parent.clone());
+                }
+            }
+            ops.push(reduced(op));
         }
     }
-    if stopped {
-        // the rest is older than anything the window needs
+    if stopped || hit {
+        // the rest is older than anything the window needs, or already kept
         let _ = child.kill();
     }
     let status = child.wait()?;
-    if !stopped && !status.success() {
-        let mut err = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
-        }
-        let first = err
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("no message");
-        anyhow::bail!(
-            "jj op log failed in {dir}: {}",
-            first.trim_start_matches("Error: ")
-        );
+    if !stopped && !hit && !status.success() {
+        return Err(failed(&mut child, &dir));
     }
+    if hit {
+        ops.extend(kept_ancestors(&pending, &read, &by_id));
+        ops.retain(|op| cutoff.is_none_or(|c| parse_instant(&op.time.start).is_ok_and(|t| t >= c)));
+    }
+    let ops = newest_first(ops)?;
+    let floor = match (cutoff, hit) {
+        (Some(c), _) => Some(c),
+        (None, true) => kept.as_ref().and_then(|k| k.floor),
+        (None, false) => None,
+    };
+    crate::adapters::cache::store(
+        OPS_CACHE,
+        &key,
+        &KeptOps {
+            floor,
+            ops: ops.clone(),
+        },
+    );
     Ok(ops)
+}
+
+/// The kept operations `pending` names, and their ancestors, not read now.
+fn kept_ancestors(
+    pending: &std::collections::HashSet<String>,
+    read: &std::collections::HashSet<String>,
+    by_id: &HashMap<&str, &JjOp>,
+) -> Vec<JjOp> {
+    let mut out = Vec::new();
+    let mut stack: Vec<&str> = pending.iter().map(String::as_str).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) || read.contains(id) {
+            continue;
+        }
+        if let Some(op) = by_id.get(id) {
+            out.push((*op).clone());
+            stack.extend(op.parents.iter().map(String::as_str));
+        }
+    }
+    out
+}
+
+/// Why `jj op log` failed, in jj's own first line.
+fn failed(child: &mut std::process::Child, dir: &str) -> anyhow::Error {
+    let mut err = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
+    }
+    let first = err
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("no message");
+    anyhow::anyhow!(
+        "jj op log failed in {dir}: {}",
+        first.trim_start_matches("Error: ")
+    )
+}
+
+/// Operations newest first, as jj prints them.
+fn newest_first(ops: Vec<JjOp>) -> Result<Vec<JjOp>> {
+    let mut timed: Vec<(Timestamp, JjOp)> = ops
+        .into_iter()
+        .map(|op| Ok((parse_instant(&op.time.start)?, op)))
+        .collect::<Result<_>>()?;
+    timed.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    Ok(timed.into_iter().map(|(_, op)| op).collect())
+}
+
+/// Where the kept operation log lives in the cache.
+const OPS_CACHE: &str = "jj-ops-v1";
+
+/// The operation log as last read: every operation from the newest down to
+/// `floor` (all of them, with none).
+#[derive(serde::Serialize, Deserialize)]
+struct KeptOps {
+    floor: Option<Timestamp>,
+    ops: Vec<JjOp>,
+}
+
+/// An operation with only what andon reads: its command's arguments only
+/// when they add or forget a workspace.
+fn reduced(mut op: JjOp) -> JjOp {
+    op.attributes
+        .retain(|k, v| k == "args" && v.contains(" workspace "));
+    op
 }
 
 /// Turn jj's commits and operations into events. Pure; tested without jj.
@@ -680,6 +841,8 @@ mod tests {
 
     fn op(start: &str, description: &str, workspace: &str) -> JjOp {
         JjOp {
+            id: String::new(),
+            parents: Vec::new(),
             time: OpTime {
                 start: start.to_owned(),
             },

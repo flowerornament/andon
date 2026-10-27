@@ -182,3 +182,40 @@ Two seats work in parallel, in files that do not overlap:
 
 `cli.rs` is shared: §5 adds commands, §3 and §4 edit argument docs and
 parsing. Whoever lands second rebases.
+
+## Amendment: speed as built (2026-10-27, andon-j4a)
+
+- **What was slow.** Profiled one adapter at a time (load average above
+  100 throughout, so the times are what an agent sees). The slow reads:
+  - murail: Codex rollouts (6 GB kept) at 22 s, and jj's operation log at
+    20 s. The log holds 44,731 operations, nearly all since the configured
+    `since`, and jj loads each one.
+  - girard: transcripts at 57 s, because its config reads every project
+    on the machine with no `since`, and hail's 49k files at 8 s.
+  - herald: bd at 8 s, nearly all of it bd's events query, which filters
+    long text columns.
+- **A cache, under the user cache directory** (`$ANDON_CACHE`, else
+  `$XDG_CACHE_HOME/andon`, else `~/.cache/andon`; `ANDON_CACHE=off`
+  disables it). Each entry is checked against its source before use, so
+  deleting the cache changes no output. It never lives in a repository or
+  a tracker. Three things are kept:
+  - Transcript parses, with where each read stopped. Transcripts are
+    append-only, so the next read resumes there. An entry is used only
+    while the file's device, inode and the bytes just before the stop
+    still match.
+  - jj's operation log. Operations are immutable: the log is read from
+    the newest down to the first kept operation from which every
+    operation still owed is kept, and the rest comes from the cache,
+    reachable through parents.
+  - bd's event rows, by id. Rows are only ever added or pruned, so only
+    ids not seen before are fetched, and a pruned id drops out.
+- **Parallel reads.** jj's four reads and its per-workspace reads run at
+  once, and so do bd's export and events query and hail's file reads.
+  Merges keep the old order.
+- **Transcripts are read whole.** The seek to near `since` in large files
+  is gone: a parse is kept from the start. A span that crossed `since` now
+  starts at its first call, not wherever the seek landed. No board or
+  scorecard on the three repositories changed.
+- **What cannot get there.** The hook is bound by `bd export` (1.4 to
+  2.2 s warm on murail and herald). That is bd's own query over the whole
+  tracker, and no cheaper read gives the same state.

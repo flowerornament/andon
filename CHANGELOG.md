@@ -4,6 +4,15 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- **A board in seconds, with progress.** On a terminal, stderr shows
+  `reading 4/7 · sessions, bd · 3.1s` while sources are read. `--timings`
+  prints each source's read time and event count to stderr after the
+  output. Warm boards on murail, herald and girard went from 30-44 s to
+  under 2 s: transcript parses, jj's operation log and bd's event rows are
+  kept under `~/.cache/andon` (or `$XDG_CACHE_HOME`, `$ANDON_CACHE`;
+  `ANDON_CACHE=off` keeps nothing), each checked against its source, and
+  jj, bd and hail read in parallel. stdout is unchanged.
+
 - Every surface explains itself (`.design/2026-10-27-first-class-interface.md`
   §3). `andon` with no command prints the board. Every argument and flag
   is described and every command's help ends with examples (a test walks

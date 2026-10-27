@@ -13,23 +13,24 @@
 //! `ids.critic_session`, so its effort counts for the seat that started it.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use jiff::{SignedDuration, Timestamp};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::adapters::Reads;
+use crate::adapters::{Reads, cache};
 use crate::config::{Config, SessionsConfig, wildcard};
 use crate::event::attr;
 use crate::event::{Event, Kind};
 use crate::time::parse_instant;
 
 /// What one transcript says.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transcript {
-    pub harness: &'static str,
+    pub harness: String,
     pub session: Option<String>,
     /// The root session, for a subagent.
     pub root: Option<String>,
@@ -149,6 +150,9 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
     let workers = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let chunk = files.len().div_ceil(workers.max(1)).max(1);
     let root = scope.root.as_deref();
+    // transcripts are append-only: a read resumes where the last one stopped
+    let kept = cache::Transcripts::open();
+    let cache = kept.as_ref();
     let read: Vec<(PathBuf, Result<Option<Transcript>, String>)> = std::thread::scope(|scope_| {
         let handles: Vec<_> = files
             .chunks(chunk)
@@ -158,9 +162,9 @@ pub fn collect_scoped(config: &Config, sc: &SessionsConfig, scope: &Scope) -> Re
                     part.iter()
                         .map(|(file, is_codex)| {
                             let got = if *is_codex {
-                                codex(file, configured, root, since)
+                                codex_cached(file, configured, root, cache)
                             } else {
-                                claude_since(file, since).map(Some)
+                                read(file, cache, new_claude, claude_from).map(Some)
                             };
                             (file.clone(), got)
                         })
@@ -259,126 +263,135 @@ fn jsonl_files(reads: &mut Reads, dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The `"timestamp"` of a raw transcript line, without parsing the rest.
-fn line_time(line: &[u8]) -> Option<Timestamp> {
-    const KEY: &[u8] = b"\"timestamp\":\"";
-    let at = memchr::memmem::find(line, KEY)? + KEY.len();
-    let end = line[at..].iter().position(|b| *b == b'"')? + at;
-    parse_instant(std::str::from_utf8(&line[at..end]).ok()?).ok()
+/// Where a read of a transcript stopped, and what the lines after it
+/// carry on from: transcripts are append-only, so a read can resume.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Resume {
+    /// The byte after the last line read.
+    pub offset: u64,
+    /// The directory the last line ran in.
+    pub cwd: String,
+    /// A Codex rollout's first directory (its `session_meta`).
+    pub started_in: Option<String>,
 }
 
-/// Where in an append-only transcript the lines from `since` on begin:
-/// a binary search on line times, for files too big to read from the top.
-fn seek_since(file: &mut File, since: Timestamp) -> u64 {
-    let Ok(len) = file.metadata().map(|m| m.len()) else {
-        return 0;
-    };
-    let time_at = |file: &mut File, offset: u64| -> Option<Timestamp> {
-        file.seek(SeekFrom::Start(offset)).ok()?;
-        let mut buf = vec![0_u8; 256 * 1024];
-        let n = file.read(&mut buf).ok()?;
-        let buf = &buf[..n];
-        let start = if offset == 0 {
-            0
-        } else {
-            buf.iter().position(|b| *b == b'\n')? + 1
-        };
-        buf[start..]
-            .split(|b| *b == b'\n')
-            .take(64)
-            .find_map(line_time)
-    };
-    let (mut lo, mut hi) = (0_u64, len);
-    while hi - lo > 1 << 20 {
-        let mid = lo + (hi - lo) / 2;
-        match time_at(file, mid) {
-            Some(t) if t < since => lo = mid,
-            _ => hi = mid,
-        }
-    }
-    lo
-}
-
-/// The transcript's lines that contain one of `needles`, as JSON, from
-/// `since` on (roughly: the seek lands up to a megabyte early). The first
-/// line is always yielded: it names the session.
-fn lines(file: &Path, since: Option<Timestamp>, needles: &[&str]) -> Result<Vec<Value>, String> {
+/// Read a transcript's JSON lines from `from`, calling `each` with every
+/// line that holds one of `needles` (and the first line, at the start: it
+/// names the session). Returns where the read stopped: after the last
+/// complete line, or before a malformed last line (it is being written).
+/// With `partial`, a last line with no newline yet is read too when it is
+/// JSON, though the read still stops before it.
+fn scan(
+    file: &Path,
+    from: u64,
+    needles: &[&str],
+    partial: bool,
+    each: &mut dyn FnMut(Value) -> Result<(), String>,
+) -> Result<u64, String> {
     let mut f = File::open(file).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    let mut first = String::new();
-    {
-        let mut reader = BufReader::new(&mut f);
-        reader.read_line(&mut first).map_err(|e| e.to_string())?;
-    }
-    if first.trim().is_empty() {
-        return Ok(out);
-    }
-    // a transcript is JSON lines; a first line that is not is no transcript
-    let head: Value =
-        serde_json::from_str(&first).map_err(|_| "its first line is not JSON".to_owned())?;
-    out.push(head);
-    let start = match since {
-        Some(t) if f.metadata().is_ok_and(|m| m.len() > 8 << 20) => seek_since(&mut f, t),
-        _ => 0,
-    };
-    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(from)).map_err(|e| e.to_string())?;
     let finders: Vec<memchr::memmem::Finder<'_>> = needles
         .iter()
         .map(|n| memchr::memmem::Finder::new(n.as_bytes()))
         .collect();
     let mut reader = BufReader::with_capacity(1 << 20, f);
     let mut buf = Vec::new();
-    // skip the first line (yielded above) or the partial line the seek landed in
-    let skipped = reader
-        .read_until(b'\n', &mut buf)
-        .map_err(|e| e.to_string())?;
-    let mut malformed = None;
-    let mut offset = start + skipped as u64;
+    let mut offset = from;
+    if from == 0 {
+        reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| e.to_string())?;
+        if buf.trim_ascii().is_empty() {
+            return Ok(if buf.ends_with(b"\n") {
+                buf.len() as u64
+            } else {
+                0
+            });
+        }
+        let complete = buf.ends_with(b"\n");
+        if !complete && !partial {
+            return Ok(0);
+        }
+        // a transcript is JSON lines; a first line that is not is no transcript
+        let head: Value =
+            serde_json::from_slice(&buf).map_err(|_| "its first line is not JSON".to_owned())?;
+        each(head)?;
+        if !complete {
+            return Ok(0);
+        }
+        offset = buf.len() as u64;
+    }
+    let mut malformed: Option<u64> = None;
     loop {
         buf.clear();
         // a read error loses the rest of the transcript: the reader says so
-        if reader
+        let n = reader
             .read_until(b'\n', &mut buf)
-            .map_err(|e| e.to_string())?
-            == 0
-        {
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        // a line still being written is read next time, and now only when
+        // asked and already whole JSON
+        if !buf.ends_with(b"\n") {
+            if partial
+                && malformed.is_none()
+                && finders.iter().any(|f| f.find(&buf).is_some())
+                && let Ok(v) = serde_json::from_slice::<Value>(&buf)
+            {
+                each(v)?;
+            }
             break;
         }
         // only the last line may be malformed: it is being written
-        if let Some(line) = malformed.take() {
+        if let Some(line) = malformed {
             return Err(format!("a line {line} bytes in is not JSON"));
         }
         let at = offset;
-        offset += buf.len() as u64;
-        let wanted = finders.iter().any(|f| f.find(&buf).is_some());
-        if wanted {
-            match serde_json::from_slice::<Value>(&buf) {
-                Ok(v) => out.push(v),
-                Err(_) if buf.ends_with(b"\n") => malformed = Some(at),
-                Err(_) => {}
+        if finders.iter().any(|f| f.find(&buf).is_some()) {
+            if let Ok(v) = serde_json::from_slice::<Value>(&buf) {
+                each(v)?;
+            } else {
+                malformed = Some(at);
+                continue;
             }
         }
+        offset += buf.len() as u64;
     }
-    Ok(out)
+    Ok(offset)
 }
 
 /// A Claude Code transcript. Subagent transcripts live under `subagents/`.
 #[must_use]
 pub fn claude(file: &Path) -> Transcript {
-    claude_since(file, None).unwrap_or_default()
+    let mut t = new_claude(file);
+    let mut resume = Resume::default();
+    match claude_from(file, &mut t, &mut resume, true) {
+        Ok(()) => t,
+        Err(_) => Transcript::default(),
+    }
 }
 
-fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, String> {
-    let mut t = Transcript {
-        harness: "claude",
+fn new_claude(file: &Path) -> Transcript {
+    Transcript {
+        harness: "claude".into(),
         subagent: file.components().any(|c| c.as_os_str() == "subagents"),
         source: file.display().to_string(),
         ..Transcript::default()
-    };
+    }
+}
+
+/// Read a Claude Code transcript on from where `resume` stopped.
+fn claude_from(
+    file: &Path,
+    t: &mut Transcript,
+    resume: &mut Resume,
+    partial: bool,
+) -> Result<(), String> {
     // a line names the directory it ran in; one that does not ran where
     // the last one did
-    let mut cwd = String::new();
-    for o in lines(file, since, &["\"tool_use\""])? {
+    let mut cwd = std::mem::take(&mut resume.cwd);
+    let offset = scan(file, resume.offset, &["\"tool_use\""], partial, &mut |o| {
         if t.session.is_none() {
             t.session = o["sessionId"].as_str().map(str::to_owned);
         }
@@ -391,14 +404,14 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
         // a line with no time is not a turn (a summary, a header); a time
         // that does not parse is a transcript andon cannot read
         let Some(ts) = o["timestamp"].as_str() else {
-            continue;
+            return Ok(());
         };
         let ts = parse_instant(ts).map_err(|e| format!("a turn's time {ts:?}: {e}"))?;
         if let Some(dir) = o["cwd"].as_str() {
             dir.clone_into(&mut cwd);
         }
         if o["type"] != "assistant" {
-            continue;
+            return Ok(());
         }
         for c in o["message"]["content"].as_array().into_iter().flatten() {
             if c["type"] != "tool_use" {
@@ -420,85 +433,87 @@ fn claude_since(file: &Path, since: Option<Timestamp>) -> Result<Transcript, Str
                     .push((ts, name.to_owned(), path.to_owned(), cwd.clone()));
             }
         }
-    }
-    Ok(t)
+        Ok(())
+    })?;
+    resume.offset = offset;
+    resume.cwd = cwd;
+    Ok(())
 }
 
-/// A Codex rollout; `Ok(None)` when its first line names a directory not
-/// kept (rollouts are many and large: one started outside every kept
-/// directory is never read), or (with `root`) when it never worked under
-/// `root`. Where it worked is read first from the rollout's small
-/// `turn_context` lines, so a scoped read parses only its seat's rollouts.
-///
-/// # Errors
-/// When the file cannot be read or is not a rollout.
-pub fn codex(
-    file: &Path,
-    keep_cwd: &dyn Fn(&str) -> bool,
-    root: Option<&str>,
-    since: Option<Timestamp>,
-) -> Result<Option<Transcript>, String> {
-    let mut t = Transcript {
-        harness: "codex",
-        source: file.display().to_string(),
-        ..Transcript::default()
-    };
-    // the first line says whose session this is: read it before the rest
-    let meta = {
-        let mut first = String::new();
-        BufReader::new(File::open(file).map_err(|e| e.to_string())?)
-            .read_line(&mut first)
-            .map_err(|e| e.to_string())?;
-        if first.trim().is_empty() {
-            return Ok(None);
-        }
-        serde_json::from_str::<Value>(&first)
-            .map_err(|_| "its first line is not JSON".to_owned())?
-    };
-    let mut cwd = String::new();
-    if meta["type"] == "session_meta" {
-        let payload = &meta["payload"];
-        payload["cwd"]
-            .as_str()
-            .unwrap_or_default()
-            .clone_into(&mut cwd);
-        t.session = payload["id"].as_str().map(str::to_owned);
-        t.subagent = payload["thread_source"] == "subagent";
-        if t.subagent {
-            t.root = payload["session_id"].as_str().map(str::to_owned);
-        }
-    }
-    if !keep_cwd(&cwd) {
+/// A Codex rollout's first directory, from its first line (`None` when it
+/// names none): read before the rest, since rollouts are many and large.
+fn codex_started_in(file: &Path) -> Result<Option<String>, String> {
+    let mut first = String::new();
+    BufReader::new(File::open(file).map_err(|e| e.to_string())?)
+        .read_line(&mut first)
+        .map_err(|e| e.to_string())?;
+    if first.trim().is_empty() {
         return Ok(None);
     }
-    let under_root = |dir: &str| root.is_none_or(|r| dir == r || dir.starts_with(&format!("{r}/")));
-    if !under_root(&cwd) {
-        let turns = lines(file, since, &["\"turn_context\""])?;
-        let worked = turns.iter().skip(1).any(|o| {
-            o["type"] == "turn_context" && o["payload"]["cwd"].as_str().is_some_and(under_root)
-        });
-        if !worked {
-            return Ok(None);
-        }
+    let meta: Value =
+        serde_json::from_str(&first).map_err(|_| "its first line is not JSON".to_owned())?;
+    Ok(Some(
+        (meta["type"] == "session_meta")
+            .then(|| meta["payload"]["cwd"].as_str())
+            .flatten()
+            .unwrap_or_default()
+            .to_owned(),
+    ))
+}
+
+fn new_codex(file: &Path) -> Transcript {
+    Transcript {
+        harness: "codex".into(),
+        source: file.display().to_string(),
+        ..Transcript::default()
     }
+}
+
+/// Read a Codex rollout on from where `resume` stopped.
+fn codex_from(
+    file: &Path,
+    t: &mut Transcript,
+    resume: &mut Resume,
+    partial: bool,
+) -> Result<(), String> {
+    let mut cwd = std::mem::take(&mut resume.cwd);
+    let mut started_in = resume.started_in.take();
+    let at_start = resume.offset == 0;
     let needles = [
         "\"turn_context\"",
         "\"function_call\"",
         "\"custom_tool_call\"",
     ];
-    for o in lines(file, since, &needles)?.into_iter().skip(1) {
+    let mut first = at_start;
+    let offset = scan(file, resume.offset, &needles, partial, &mut |o| {
         let payload = &o["payload"];
+        // the first line says whose session this is
+        if std::mem::take(&mut first) {
+            if o["type"] == "session_meta" {
+                payload["cwd"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .clone_into(&mut cwd);
+                t.session = payload["id"].as_str().map(str::to_owned);
+                t.subagent = payload["thread_source"] == "subagent";
+                if t.subagent {
+                    t.root = payload["session_id"].as_str().map(str::to_owned);
+                }
+            }
+            started_in = Some(cwd.clone());
+            return Ok(());
+        }
         // a turn says where the calls after it run
         if o["type"] == "turn_context" {
             if let Some(dir) = payload["cwd"].as_str() {
                 dir.clone_into(&mut cwd);
             }
-            continue;
+            return Ok(());
         }
         // a line with no time is not a turn (a summary, a header); a time
         // that does not parse is a transcript andon cannot read
         let Some(ts) = o["timestamp"].as_str() else {
-            continue;
+            return Ok(());
         };
         let ts = parse_instant(ts).map_err(|e| format!("a turn's time {ts:?}: {e}"))?;
         let kind = payload["type"].as_str().unwrap_or_default();
@@ -514,8 +529,69 @@ pub fn codex(
                 }
             }
         }
+        Ok(())
+    })?;
+    resume.offset = offset;
+    resume.cwd = cwd;
+    resume.started_in = started_in;
+    Ok(())
+}
+
+/// A Codex rollout; `Ok(None)` when its first line names a directory not
+/// kept (rollouts are many and large: one started outside every kept
+/// directory is never read), or (with `root`) when it never worked under
+/// `root`.
+///
+/// # Errors
+/// When the file cannot be read or is not a rollout.
+pub fn codex(
+    file: &Path,
+    keep_cwd: &dyn Fn(&str) -> bool,
+    root: Option<&str>,
+) -> Result<Option<Transcript>, String> {
+    codex_cached(file, keep_cwd, root, None)
+}
+
+fn codex_cached(
+    file: &Path,
+    keep_cwd: &dyn Fn(&str) -> bool,
+    root: Option<&str>,
+    cache: Option<&cache::Transcripts>,
+) -> Result<Option<Transcript>, String> {
+    let Some(started_in) = codex_started_in(file)? else {
+        return Ok(None);
+    };
+    if !keep_cwd(&started_in) {
+        return Ok(None);
     }
-    Ok(Some(t))
+    let t = read(file, cache, new_codex, codex_from)?;
+    let under_root = |dir: &str| root.is_none_or(|r| dir == r || dir.starts_with(&format!("{r}/")));
+    let worked = under_root(&started_in) || t.calls.iter().any(|(_, c)| under_root(c));
+    Ok(worked.then_some(t))
+}
+
+/// A transcript, read whole or resumed from the cache.
+fn read(
+    file: &Path,
+    cache: Option<&cache::Transcripts>,
+    new: fn(&Path) -> Transcript,
+    from: fn(&Path, &mut Transcript, &mut Resume, bool) -> Result<(), String>,
+) -> Result<Transcript, String> {
+    let kept = cache.and_then(|c| c.get(file));
+    let (mut t, mut resume) = kept.unwrap_or_else(|| (new(file), Resume::default()));
+    let before = resume.clone();
+    from(file, &mut t, &mut resume, false)?;
+    if let Some(c) = cache
+        && resume != before
+    {
+        c.put(file, &t, &resume);
+    }
+    // a last line with no newline yet counts now, and is read again next
+    // time from where the kept parse stopped
+    if std::fs::metadata(file).is_ok_and(|m| m.len() > resume.offset) {
+        from(file, &mut t, &mut resume.clone(), true)?;
+    }
+    Ok(t)
 }
 
 /// The files an `apply_patch` call names: its patch is the custom tool
@@ -599,7 +675,7 @@ pub fn spans(t: &Transcript, gap: SignedDuration, since: Option<Timestamp>) -> V
         e.ids.session.clone_from(&session);
         e.ids.critic_session.clone_from(&critic);
         e.set_attr(attr::CWD, cwd.to_owned());
-        e.set_attr(attr::HARNESS, t.harness);
+        e.set_attr(attr::HARNESS, t.harness.clone());
         e
     };
     let mut out: Vec<(Timestamp, Timestamp, usize, &str)> = Vec::new();
@@ -665,7 +741,7 @@ mod tests {
     fn calls_closer_than_the_gap_form_one_span() {
         let ts = |s: &str| parse_instant(s).unwrap_or_else(|e| panic!("{e}"));
         let t = Transcript {
-            harness: "claude",
+            harness: "claude".into(),
             session: Some("s1".into()),
             calls: vec![
                 (ts("2026-10-13T10:00:00Z"), "/code/andon-1b".into()),
@@ -863,19 +939,55 @@ mod tests {
         ];
         std::fs::write(&file, lines.join("\n") + "\n").unwrap_or_else(|e| panic!("{e}"));
         let keep = |c: &str| c.starts_with("/code/x-");
-        let t = codex(&file, &keep, None, None)
+        let t = codex(&file, &keep, None)
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("the rollout worked in a kept directory"));
         let events = spans(&t.kept(&keep), SignedDuration::from_mins(10), None);
         let actors: Vec<&str> = events.iter().filter_map(|e| e.actor.as_deref()).collect();
         assert_eq!(actors, vec!["x-dev", "x-1b"]);
         // scoped to another workspace, the rollout is not read at all
-        assert!(matches!(
-            codex(&file, &keep, Some("/code/x-1a"), None),
-            Ok(None)
-        ));
+        assert!(matches!(codex(&file, &keep, Some("/code/x-1a")), Ok(None)));
         // nor is one that started outside every kept directory
         let only_1b = |c: &str| c.starts_with("/code/x-1b");
-        assert!(matches!(codex(&file, &only_1b, None, None), Ok(None)));
+        assert!(matches!(codex(&file, &only_1b, None), Ok(None)));
+    }
+
+    #[test]
+    fn a_resumed_read_is_the_whole_read() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("s.jsonl");
+        let line = |t: &str, cwd: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"{t}","sessionId":"s1","cwd":"{cwd}","message":{{"content":[{{"type":"tool_use","name":"Bash","input":{{}}}}]}}}}"#
+            )
+        };
+        let cache = cache::Transcripts::at(&dir.path().join("cache"));
+        let fresh = |file: &Path| read(file, None, new_claude, claude_from);
+        let cached = |file: &Path| read(file, Some(&cache), new_claude, claude_from);
+        let write = |text: String| std::fs::write(&file, text).unwrap_or_else(|e| panic!("{e}"));
+        let mut text = format!(
+            "{}\n{}\n",
+            line("2026-10-13T10:00:00Z", "/x-1a"),
+            line("2026-10-13T10:05:00Z", "/x-1a")
+        );
+        write(text.clone());
+        assert_eq!(cached(&file), fresh(&file));
+        // appended, with a last line still being written: resumed, it is
+        // what a whole read gives, and the half line counts once
+        text.push_str(&line("2026-10-13T10:10:00Z", "/x-1b"));
+        text.push('\n');
+        text.push_str(&line("2026-10-13T10:15:00Z", "/x-1b"));
+        write(text.clone());
+        let got = cached(&file);
+        assert_eq!(got, fresh(&file));
+        assert_eq!(got.as_ref().map(|t| t.calls.len()).ok(), Some(4));
+        text.push('\n');
+        write(text);
+        assert_eq!(cached(&file).map(|t| t.calls.len()).ok(), Some(4));
+        // rewritten from the start: the kept parse no longer describes it
+        write(format!("{}\n", line("2026-10-14T09:00:00Z", "/x-1c")));
+        let got = cached(&file);
+        assert_eq!(got, fresh(&file));
+        assert_eq!(got.map(|t| t.calls.len()).ok(), Some(1));
     }
 }

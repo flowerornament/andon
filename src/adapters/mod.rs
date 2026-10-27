@@ -2,6 +2,7 @@
 //! read-only; none writes to the source it reads.
 
 pub mod bd;
+pub mod cache;
 pub mod external;
 pub mod ferry;
 pub mod git;
@@ -9,6 +10,7 @@ pub mod github;
 pub mod hail;
 pub mod jj;
 pub mod presence;
+pub mod progress;
 pub mod sessions;
 
 use anyhow::{Context, Result};
@@ -118,25 +120,25 @@ fn run_adapters(
     );
     // adapters read independent sources: run them at once; the ledger's sort
     // makes the result independent of which finishes first
-    let trace = std::env::var_os("ANDON_TRACE").is_some();
+    let read = progress::Read::new(jobs.iter().map(|(name, _)| name.clone()).collect());
     let results: Vec<(String, Result<Vec<Event>>)> = std::thread::scope(|scope| {
+        let read = &read;
         let handles: Vec<_> = jobs
             .iter()
-            .map(|(name, job)| {
+            .enumerate()
+            .map(|(i, (_, job))| {
                 scope.spawn(move || {
-                    let started = std::time::Instant::now();
+                    // a reader that stops still finishes, or the line would
+                    // wait for it forever
+                    let guard = read.guard(i);
                     let got = job();
-                    if trace {
-                        let n = got.as_ref().map_or(0, Vec::len);
-                        eprintln!(
-                            "andon: adapter {name}: {n} events in {:?}",
-                            started.elapsed()
-                        );
-                    }
+                    guard.done(got.as_ref().ok().map(Vec::len));
                     got
                 })
             })
             .collect();
+        // the progress line, on stderr, while the adapters read
+        scope.spawn(move || read.draw());
         jobs.iter()
             .zip(handles)
             .map(|((name, _), h)| {

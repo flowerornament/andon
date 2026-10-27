@@ -37,6 +37,7 @@ fn bd(dir: &Path, issues: &[&str], rows: &str) -> String {
 
 fn row(issue: &str, kind: &str, at: &str, new: &str) -> String {
     serde_json::json!({
+        "id": format!("{issue}-{kind}-{at}"),
         "issue_id": issue, "event_type": kind, "actor": "x-1a",
         "new_value": new, "created_at": at, "old_assignee": null, "old_known": 0,
     })

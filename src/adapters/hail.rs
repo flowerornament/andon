@@ -7,7 +7,7 @@
 //! the headline and body with the project's goal pattern.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use regex::Regex;
@@ -47,33 +47,34 @@ pub fn collect(config: &Config, hc: &HailConfig) -> Result<Vec<Event>> {
         // no seats directory: nothing was read, so nothing is covered
         return Ok(Vec::new());
     }
-    for seat_dir in reads.list(&root) {
-        let label = label(&seat_dir.file_name().unwrap_or_default().to_string_lossy());
-        for state in ["new", "cur", "owed", "pending"] {
-            let files = reads.list(&seat_dir.join(state));
-            let seat_kept = keep(&label);
-            for file in files {
-                let name = file
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                let Some(id) = message_id(&name) else {
-                    continue;
-                };
-                if let Some(since) = since {
-                    let modified = std::fs::metadata(&file)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| jiff::Timestamp::try_from(t).ok());
-                    if modified.is_some_and(|m| m < since) {
-                        continue;
-                    }
-                }
-                // in another project's seat, a message matters only if one of
-                // ours sent it: read its headers before the rest
-                if !seat_kept && !messages.contains_key(id) {
-                    match header_from(&file) {
+    // every copy, in listing order; then each read at once, then merged in
+    // that order, so the merge is the same as reading them one by one
+    let copies = copies(&mut reads, &root);
+    // what each copy says: its whole text in a seat of ours; in another
+    // project's seat only its sender first (it matters only if one of ours
+    // sent it)
+    let read: Vec<Copy> = parallel(&copies, |c: &(String, &'static str, PathBuf, String)| {
+        let (label, file) = (&c.0, &c.2);
+        let when = modified(file);
+        if since.is_some_and(|s| when.is_some_and(|m| m < s)) {
+            return Copy::Old;
+        }
+        if keep(label) {
+            Copy::Text(
+                std::fs::read_to_string(file).map_err(|e| e.to_string()),
+                when,
+            )
+        } else {
+            Copy::Sender(header_from(file), when)
+        }
+    });
+    for ((label, state, file, id), copy) in copies.iter().zip(read) {
+        let (text, when) = match copy {
+            Copy::Old => continue,
+            Copy::Text(text, when) => (Some(text), when),
+            Copy::Sender(from, when) => {
+                if !messages.contains_key(id) {
+                    match from {
                         Ok(from) if from.as_deref().is_some_and(keep) => {}
                         Ok(_) => continue,
                         // whose message it is cannot be told: a gap
@@ -83,23 +84,23 @@ pub fn collect(config: &Config, hc: &HailConfig) -> Result<Vec<Event>> {
                         }
                     }
                 }
-                let m = messages.entry(id.to_owned()).or_default();
-                if m.source.is_empty() || state != "pending" {
-                    if let Err(e) = read_copy(&file, state == "pending", &label, m) {
-                        reads.unreadable.push((file.clone(), e));
-                    }
-                    if m.source.is_empty() {
-                        m.source = file.display().to_string();
-                        m.modified = std::fs::metadata(&file)
-                            .and_then(|md| md.modified())
-                            .ok()
-                            .and_then(|t| jiff::Timestamp::try_from(t).ok());
-                    }
-                }
-                if state != "pending" && !m.recipients.contains(&label) {
-                    m.recipients.push(label.clone());
-                }
+                (None, when)
             }
+        };
+        let m = messages.entry(id.clone()).or_default();
+        if m.source.is_empty() || *state != "pending" {
+            let text =
+                text.unwrap_or_else(|| std::fs::read_to_string(file).map_err(|e| e.to_string()));
+            if let Err(e) = text.map(|t| merge_copy(&t, *state == "pending", label, m)) {
+                reads.unreadable.push((file.clone(), e));
+            }
+            if m.source.is_empty() {
+                m.source = file.display().to_string();
+                m.modified = when;
+            }
+        }
+        if *state != "pending" && !m.recipients.contains(label) {
+            m.recipients.push(label.clone());
         }
     }
     let mut events = Vec::new();
@@ -144,11 +145,68 @@ pub fn collect(config: &Config, hc: &HailConfig) -> Result<Vec<Event>> {
     Ok(events)
 }
 
+/// Every copy of a message under `root`, in listing order: the seat it
+/// sits with, its state directory, the file and the message's id.
+fn copies(reads: &mut Reads, root: &Path) -> Vec<(String, &'static str, PathBuf, String)> {
+    let mut out = Vec::new();
+    for seat_dir in reads.list(root) {
+        let label = label(&seat_dir.file_name().unwrap_or_default().to_string_lossy());
+        for state in ["new", "cur", "owed", "pending"] {
+            for file in reads.list(&seat_dir.join(state)) {
+                let name = file
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                if let Some(id) = message_id(&name) {
+                    let id = id.to_owned();
+                    out.push((label.clone(), state, file, id));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// When a file was last written, if that can be read.
+fn modified(file: &Path) -> Option<jiff::Timestamp> {
+    std::fs::metadata(file)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| jiff::Timestamp::try_from(t).ok())
+}
+
+/// One copy, as read.
+enum Copy {
+    /// Older than `since`: not read.
+    Old,
+    /// Its text, and when it was last written.
+    Text(Result<String, String>, Option<jiff::Timestamp>),
+    /// Its sender alone, and when it was last written.
+    Sender(Result<Option<String>, String>, Option<jiff::Timestamp>),
+}
+
+/// `f` over `items`, on every core at once, the results in order.
+fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let workers = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+    let chunk = items.len().div_ceil(workers.max(1)).max(1);
+    std::thread::scope(|s| {
+        let f = &f;
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|part| s.spawn(move || part.iter().map(f).collect::<Vec<R>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    })
+}
+
 /// Merge one copy of a message into `m`. The sender's outbox copy
 /// (`pending/`) names no sender: the seat directory it sits in is the sender.
-fn read_copy(file: &Path, pending: bool, label: &str, m: &mut Message) -> Result<(), String> {
-    let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
-    let (mut headers, body) = parse(&text);
+fn merge_copy(text: &str, pending: bool, label: &str, m: &mut Message) {
+    let (mut headers, body) = parse(text);
     if pending && !headers.contains_key("from") && !headers.contains_key("issuer") {
         headers.insert("from".to_owned(), label.to_owned());
     }
@@ -158,7 +216,6 @@ fn read_copy(file: &Path, pending: bool, label: &str, m: &mut Message) -> Result
     if body.len() > m.body.len() {
         m.body = body;
     }
-    Ok(())
 }
 
 /// The sender label, from the header lines alone.
