@@ -186,6 +186,37 @@ fn a_kept_ledger_replaces_the_sources() {
     assert_eq!(board["seats"][0]["runs"]["unknown"], "no source reads runs");
 }
 
+#[test]
+fn asof_a_date_is_its_end_in_the_readers_zone() {
+    let dir = empty_project("[seats.andon-1b]\n");
+    std::fs::write(dir.path().join("l.jsonl"), "").unwrap_or_else(|e| panic!("{e}"));
+    let asof = |tz: &str, when: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_andon"))
+            .args(["--ledger", "l.jsonl", "asof", when, "--json"])
+            .env("TZ", tz)
+            .current_dir(dir.path())
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let board: serde_json::Value =
+            serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", stdout(&out)));
+        board["asof"].as_str().unwrap_or_default().to_owned()
+    };
+    // a date was once read as its start, though its help says its end
+    assert_eq!(asof("UTC", "2026-10-24"), "2026-10-25T00:00:00Z");
+    assert_eq!(
+        asof("America/Los_Angeles", "2026-10-24"),
+        "2026-10-25T07:00:00Z"
+    );
+    assert_eq!(
+        asof("America/Los_Angeles", "2026-10-24T12:00"),
+        "2026-10-24T19:00:00Z"
+    );
+    assert_eq!(
+        asof("America/Los_Angeles", "2026-10-24T12:00Z"),
+        "2026-10-24T12:00:00Z"
+    );
+}
+
 fn hook_with(args: &[&str], dir: &Path, payload: &str) -> Output {
     use std::io::Write;
     let mut child = Command::new(env!("CARGO_BIN_EXE_andon"))

@@ -256,7 +256,7 @@ impl Coverage {
 
 fn day(t: Timestamp) -> String {
     t.to_zoned(TimeZone::UTC)
-        .strftime("%Y-%m-%d %H:%M")
+        .strftime("%Y-%m-%d %H:%M UTC")
         .to_string()
 }
 
@@ -321,7 +321,7 @@ mod tests {
                 at("2026-10-06T00:00:00Z")
             )
             .as_deref(),
-            Some("landings are read from 2026-10-09 00:00 (jj)")
+            Some("landings are read from 2026-10-09 00:00 UTC (jj)")
         );
         assert_eq!(
             c.check(
@@ -331,7 +331,7 @@ mod tests {
                 at("2026-10-15T00:00:00Z")
             )
             .as_deref(),
-            Some("landings are read only until 2026-10-14 00:00 (jj)")
+            Some("landings are read only until 2026-10-14 00:00 UTC (jj)")
         );
         assert_eq!(
             c.check(
@@ -359,7 +359,7 @@ mod tests {
         // after the capture, the reason names the capture, not the instant
         assert_eq!(
             c.check(&["state:claim"], None, late, late).as_deref(),
-            Some("goal states are read only until 2026-10-14 04:00 (bd)")
+            Some("goal states are read only until 2026-10-14 04:00 UTC (bd)")
         );
         assert_eq!(c.check_state(&["claim"], None, at4), None);
     }

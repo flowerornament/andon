@@ -59,6 +59,62 @@ fn looks_numeric(cell: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, '.' | '%' | '-' | '/'))
 }
 
+/// How text is shown to its reader: the zone its times print in. Read from
+/// the environment at render, like the capture instant; a fold never sees it.
+#[derive(Debug, Clone)]
+pub struct Display {
+    pub zone: TimeZone,
+}
+
+impl Display {
+    /// UTC: for tests, and a reader who sets `TZ=UTC`.
+    #[must_use]
+    pub fn utc() -> Self {
+        Self {
+            zone: TimeZone::UTC,
+        }
+    }
+
+    /// The reader's local zone (`TZ` honored).
+    #[must_use]
+    pub fn local() -> Self {
+        Self {
+            zone: TimeZone::system(),
+        }
+    }
+
+    /// A time with its zone: `2026-10-26 23:42 PDT`.
+    #[must_use]
+    pub fn time(&self, t: Timestamp) -> String {
+        t.to_zoned(self.zone.clone())
+            .strftime("%Y-%m-%d %H:%M %Z")
+            .to_string()
+    }
+
+    /// A time without its zone, for the start of a range whose end names it.
+    #[must_use]
+    pub fn bare_time(&self, t: Timestamp) -> String {
+        t.to_zoned(self.zone.clone())
+            .strftime("%Y-%m-%d %H:%M")
+            .to_string()
+    }
+}
+
+/// A span as a person says it: `1 day`, `3 days`, `7d 6h`, `5h 30m`, `40m`.
+#[must_use]
+pub fn span(from: Timestamp, to: Timestamp) -> String {
+    let secs = to.duration_since(from).as_secs().max(0);
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3_600, secs % 3_600 / 60);
+    match (d, h, m) {
+        (1, 0, 0) => "1 day".to_owned(),
+        (d, 0, 0) if d > 0 => format!("{d} days"),
+        (d, h, _) if d > 0 => format!("{d}d {h}h"),
+        (0, h, 0) if h > 0 => format!("{h}h"),
+        (0, h, m) if h > 0 => format!("{h}h {m}m"),
+        (_, _, m) => format!("{m}m"),
+    }
+}
+
 /// A short UTC time: `2026-10-11 07:28`.
 #[must_use]
 pub fn short_time(t: Timestamp) -> String {
@@ -209,22 +265,29 @@ pub fn scorecard_help() -> String {
     out
 }
 
-/// The scorecard as text.
+/// The scorecard as text, its times in UTC.
 #[must_use]
 pub fn scorecard(card: &Scorecard) -> String {
+    scorecard_in(card, &Display::utc())
+}
+
+/// The scorecard as text, for `display`.
+#[must_use]
+pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "scorecard {} .. {} ({} days)\n",
-        short_time(card.from),
-        short_time(card.to),
-        card.days
+        "scorecard {} .. {} ({})\n",
+        display.bare_time(card.from),
+        display.time(card.to),
+        span(card.from, card.to)
     );
-    if card.asked_to.is_some() {
+    if let Some(asked) = card.asked_to {
         let _ = writeln!(
             out,
-            "counted to {}; the window ends in the future\n",
-            short_time(card.to)
+            "counted to {}, when the sources were read; the window asked for ends {}\n",
+            display.time(card.to),
+            display.time(asked)
         );
     }
     let shown: Vec<&SeatCard> = card
@@ -616,12 +679,18 @@ pub fn board_help() -> String {
     out
 }
 
-/// The board as text.
+/// The board as text, its times in UTC.
 #[must_use]
 pub fn board(board: &Board) -> String {
+    board_in(board, &Display::utc())
+}
+
+/// The board as text, for `display`.
+#[must_use]
+pub fn board_in(board: &Board, display: &Display) -> String {
     let mut out = format!(
         "board as of {} · counts over the last {}h\n\n",
-        short_time(board.asof),
+        display.time(board.asof),
         board.window_hours
     );
     out.push_str(&grid(
@@ -693,6 +762,29 @@ mod tests {
             table(&rows),
             "seat       runs  flags\nx-seat-2b   479  479 runs since last landing\nx             —\n"
         );
+    }
+
+    #[test]
+    fn spans_read_as_people_say_them() {
+        let t = |s: &str| -> Timestamp { s.parse().unwrap_or_else(|e| panic!("{e}")) };
+        let from = t("2026-10-20T00:00:00Z");
+        assert_eq!(span(from, t("2026-10-21T00:00:00Z")), "1 day");
+        assert_eq!(span(from, t("2026-10-23T00:00:00Z")), "3 days");
+        assert_eq!(span(from, t("2026-10-27T06:44:00Z")), "7d 6h");
+        assert_eq!(span(from, t("2026-10-20T05:30:00Z")), "5h 30m");
+        assert_eq!(span(from, t("2026-10-20T00:40:00Z")), "40m");
+    }
+
+    #[test]
+    fn a_header_time_names_its_zone() {
+        let t: Timestamp = "2026-10-27T06:42:00Z"
+            .parse()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(Display::utc().time(t), "2026-10-27 06:42 UTC");
+        let pdt = Display {
+            zone: TimeZone::get("America/Los_Angeles").unwrap_or_else(|e| panic!("{e}")),
+        };
+        assert_eq!(pdt.time(t), "2026-10-26 23:42 PDT");
     }
 
     #[test]

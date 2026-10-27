@@ -296,7 +296,7 @@ fn a_window_before_coverage_is_unknown_with_the_horizon_named() {
     let c = scorecard(&ledger(None), &config(), window);
     assert_eq!(
         c.seats["x-1a"].landings.reason(),
-        Some("landings are read from 2026-10-01 00:00 (land)")
+        Some("landings are read from 2026-10-01 00:00 UTC (land)")
     );
     // the cell itself, not only the reasons line (C9: CARD_CELL)
     let text = andon::render::scorecard(&c);
@@ -765,7 +765,7 @@ fn a_window_ending_in_the_future_counts_to_the_capture() {
     assert_eq!(c.seats["x-1a"].landings, 1);
     let text = andon::render::scorecard(&c);
     assert!(
-        text.contains("counted to 2026-10-13 23:00; the window ends in the future"),
+        text.contains("counted to 2026-10-13 23:00 UTC, when the sources were read"),
         "{text}"
     );
 }

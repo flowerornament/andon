@@ -14,10 +14,11 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use jiff::Timestamp;
+use jiff::tz::TimeZone;
 
 use crate::config::{self, Config};
 use crate::ledger::Ledger;
-use crate::time::{Window, parse_instant};
+use crate::time::{Window, endpoint_in};
 use crate::{adapters, fold, render};
 
 /// The signal board for many agents on one repository, derived from the
@@ -40,6 +41,9 @@ pub enum Command {
     /// The four gauges per seat over a window: DAY, FROM..TO or FROM..
     #[command(long_about = render::scorecard_help())]
     Scorecard {
+        /// The window: a day (2026-10-24, today, yesterday), FROM..TO,
+        /// FROM.., or the last 6h or 2d. Dates are local days.
+        #[arg(default_value = "today", allow_hyphen_values = true)]
         window: String,
         #[arg(long)]
         json: bool,
@@ -55,6 +59,9 @@ pub enum Command {
     },
     /// The board as it stood at an instant (a date means its end).
     Asof {
+        /// The instant: a date (its end), a time (local, or with Z or an
+        /// offset), yesterday, or -6h.
+        #[arg(allow_hyphen_values = true)]
         when: String,
         #[arg(long)]
         seat: Option<String>,
@@ -63,8 +70,8 @@ pub enum Command {
     },
     /// Print the ledger as JSONL, for a project to keep.
     Ledger {
-        /// Only events at or after this instant or date.
-        #[arg(long)]
+        /// Only events at or after this instant or date (local), or -6h.
+        #[arg(long, allow_hyphen_values = true)]
         since: Option<String>,
     },
     /// Read a harness hook's JSON on stdin; print the seat's row and what
@@ -185,7 +192,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             let ledger = load_ledger(cli, &config)?;
             let ledger = match since {
                 Some(since) => {
-                    let from = Window::parse(&format!("{since}.."), Timestamp::MAX)?.from;
+                    let from = endpoint_in(since, clock(), &TimeZone::system(), false)?;
                     Ledger::new(
                         ledger
                             .events()
@@ -209,9 +216,11 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             show_board(out, &ledger, &config, now, seat.as_deref(), *json)
         }
         Command::Asof { when, seat, json } => {
-            let config = load_config(cli, clock())?;
+            let now = clock();
+            let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
-            let asof = instant_or_day_end(when)?;
+            // a date is its end; a moment not yet come is now
+            let asof = endpoint_in(when, now, &TimeZone::system(), true)?.min(now);
             show_board(out, &ledger, &config, asof, seat.as_deref(), *json)
         }
         Command::Scorecard { window, json } => {
@@ -220,13 +229,13 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
-            let window = Window::parse(window, now)?;
+            let window = Window::parse_in(window, now, &TimeZone::system())?;
             let card = fold::scorecard::scorecard(&ledger, &config, window);
             if *json {
                 serde_json::to_writer_pretty(&mut *out, &card)?;
                 out.write_all(b"\n")?;
             } else {
-                out.write_all(render::scorecard(&card).as_bytes())?;
+                out.write_all(render::scorecard_in(&card, &render::Display::local()).as_bytes())?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -345,7 +354,7 @@ fn show_board(
         serde_json::to_writer_pretty(&mut *out, &board)?;
         out.write_all(b"\n")?;
     } else {
-        out.write_all(render::board(&board).as_bytes())?;
+        out.write_all(render::board_in(&board, &render::Display::local()).as_bytes())?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -395,15 +404,4 @@ pub fn load_ledger(cli: &Cli, config: &Config) -> Result<Ledger> {
         Some(path) => Ledger::open(path),
         None => adapters::collect(config),
     }
-}
-
-/// Parse an instant or a date (a date means its end, for `asof`).
-///
-/// # Errors
-/// When the text is neither.
-pub fn instant_or_day_end(text: &str) -> Result<Timestamp> {
-    if let Ok(t) = parse_instant(text) {
-        return Ok(t);
-    }
-    Ok(Window::parse(text, Timestamp::MAX)?.to)
 }

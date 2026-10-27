@@ -4,6 +4,18 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- Time reads and prints in the reader's zone
+  (`.design/2026-10-27-first-class-interface.md` §4). Text headers name
+  the zone (`board as of 2026-10-26 23:42 PDT`); `TZ=UTC` gives the UTC
+  view, and `--json` stays UTC. A date or a time without a zone, typed for
+  `asof`, `scorecard` or `ledger --since`, is local; `now`, `today`,
+  `yesterday`, `-6h` and `-2d` are accepted, and a scorecard window may be
+  `6h` or `2d`. `scorecard` with no window is today. A bad time names what
+  is accepted. Spans read `1 day` or `7d 6h`. Coverage reasons label their
+  times UTC.
+- Fixed: `asof 2026-10-24` showed the board at that date's start; a date
+  means its end, as `asof --help` says.
+
 ## v0.3.0 - 2026-10-19
 
 Supervision you can build on: every attribute and adapter is held to a
