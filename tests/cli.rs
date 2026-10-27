@@ -416,3 +416,61 @@ fn without_a_goal_section_there_are_no_goal_checks_and_no_goal_columns() {
         }
     }
 }
+
+#[test]
+fn every_argument_is_described_and_every_command_shows_examples() {
+    use clap::CommandFactory;
+    fn walk(command: &clap::Command, path: &str, missing: &mut Vec<String>) {
+        let here = format!("{path} {}", command.get_name());
+        for arg in command.get_arguments() {
+            let id = arg.get_id().as_str();
+            if matches!(id, "help" | "version") {
+                continue;
+            }
+            if arg.get_help().is_none() && arg.get_long_help().is_none() {
+                missing.push(format!("{here} {id}: no description"));
+            }
+        }
+        let leaf = command.get_subcommands().next().is_none();
+        // a command group (check) shows its examples; so does every leaf of
+        // the top level; `check`'s leaves share their group's
+        if (leaf || command.get_name() == "check") && path.split(' ').count() <= 2 {
+            let examples = command
+                .get_after_help()
+                .is_some_and(|h| h.to_string().contains("andon "));
+            if !examples && command.get_name() != "help" {
+                missing.push(format!("{here}: no examples"));
+            }
+        }
+        for sub in command.get_subcommands() {
+            walk(sub, &here, missing);
+        }
+    }
+    let mut missing = Vec::new();
+    walk(&andon::cli::Cli::command(), "", &mut missing);
+    assert!(missing.is_empty(), "{missing:#?}");
+}
+
+#[test]
+fn hook_help_prints_and_no_command_is_the_board() {
+    let out = andon(&["hook", "--help"], Path::new("."));
+    assert!(out.status.success());
+    assert!(
+        stdout(&out).contains("Usage: andon hook"),
+        "{}",
+        stdout(&out)
+    );
+    // a malformed hook command line is still swallowed
+    let bad = andon(&["hook", "--bogus"], Path::new("."));
+    assert!(bad.status.success());
+    assert_eq!(stdout(&bad), "");
+    let dir = empty_project("[seats.andon-1b]\n");
+    std::fs::write(dir.path().join("l.jsonl"), "").unwrap_or_else(|e| panic!("{e}"));
+    let bare = andon(&["--ledger", "l.jsonl"], dir.path());
+    assert!(bare.status.success(), "{}", stdout(&bare));
+    assert!(
+        stdout(&bare).starts_with("board as of "),
+        "{}",
+        stdout(&bare)
+    );
+}

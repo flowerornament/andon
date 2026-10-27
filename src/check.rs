@@ -146,14 +146,10 @@ pub fn goal(
             "{id}: no goal schema is configured ([goal] in andon.toml), so there is nothing to check"
         ));
     }
+    // every problem, in the one line: a fix left unnamed is a second refusal
     let problems = goal::problems(description, config);
-    if let Some(first) = problems.first() {
-        let more = if problems.len() > 1 {
-            format!(" (and {} more)", problems.len() - 1)
-        } else {
-            String::new()
-        };
-        return Answer::Refused(format!("{id}: {first}{more}"));
+    if !problems.is_empty() {
+        return Answer::Refused(format!("{id}: {}", problems.join("; ")));
     }
     let sections = goal::sections(description);
     if let Some(pool) = goal::section(&sections, "pool").map(str::trim)
@@ -455,7 +451,7 @@ mod tests {
         let now = at("2026-10-13T12:00:00Z");
         assert_eq!(
             goal("andon-new", "## Why\n\nx\n", &l, &c, now).line(),
-            "refused: andon-new: add a \"## Done when\" section (and 1 more)"
+            "refused: andon-new: add a \"## Done when\" section; add a \"## Budget\" section"
         );
         assert_eq!(
             goal("andon-new", GOAL, &l, &c, now).line(),

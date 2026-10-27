@@ -4,6 +4,17 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- Every surface explains itself (`.design/2026-10-27-first-class-interface.md`
+  §3). `andon` with no command prints the board. Every argument and flag
+  is described and every command's help ends with examples (a test walks
+  the command tree); commands list board first; `--config`, `--ledger`
+  and `--color` are grouped as global options. `hook --help` prints help
+  (a malformed hook command line is still swallowed). `check goal` names
+  every missing section in its one line. The README leads with a board, a
+  quickstart and the commands, and holds a configuration reference with
+  every key at its default, which a test parses as a config and holds to
+  `src/config.rs`.
+
 - The board reads at a glance (`.design/2026-10-27-first-class-interface.md`
   §6). On a terminal, flags are red (over budget, a refused land, idle
   while holding) or yellow (WIP, a stall, an overlap), each flagged seat's

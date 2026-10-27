@@ -24,19 +24,53 @@ use crate::{adapters, fold, render};
 /// The signal board for many agents on one repository, derived from the
 /// artifacts they already write.
 #[derive(Debug, Parser)]
-#[command(name = "andon", version, about)]
+#[command(
+    name = "andon",
+    version,
+    about,
+    after_help = "\
+With no command, andon prints the board.
+
+Examples:
+  andon                        the board, now
+  andon asof yesterday         the board at the end of yesterday
+  andon scorecard 7d           the four gauges over the last seven days
+  andon check commit @         may this commit land? (exit 1 names the fix)
+  andon init > andon.toml      a starter config
+
+Exit codes: 0 rendered or passed; 1 a check refused; 2 andon could not
+decide (the line says what to repair). Times print in the local zone;
+TZ=UTC andon ... prints UTC."
+)]
 pub struct Cli {
     /// The config file (default: andon.toml here or in the nearest ancestor).
-    #[arg(long, global = true, value_name = "FILE")]
+    #[arg(
+        long,
+        global = true,
+        value_name = "FILE",
+        help_heading = "Global options"
+    )]
     pub config: Option<PathBuf>,
     /// Read a kept ledger (from `andon ledger`) instead of the sources.
-    #[arg(long, global = true, value_name = "FILE")]
+    #[arg(
+        long,
+        global = true,
+        value_name = "FILE",
+        help_heading = "Global options"
+    )]
     pub ledger: Option<PathBuf>,
     /// Color: auto (on a terminal, unless `NO_COLOR` is set), always or never.
-    #[arg(long, global = true, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        value_name = "WHEN",
+        default_value_t = Color::Auto,
+        help_heading = "Global options"
+    )]
     pub color: Color,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 /// When text output is painted.
@@ -63,18 +97,11 @@ fn display(cli: &Cli) -> render::Display {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// The four gauges per seat over a window: DAY, FROM..TO or FROM..
-    #[command(long_about = render::scorecard_help())]
-    Scorecard {
-        /// The window: a day (2026-10-24, today, yesterday), FROM..TO,
-        /// FROM.., or the last 6h or 2d. Dates are local days.
-        #[arg(default_value = "today", allow_hyphen_values = true)]
-        window: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// One row per seat: goal, budget spent, landings, runs, verdict, flags.
-    #[command(long_about = render::board_help())]
+    /// One row per seat now: goal, budget spent, landings, runs, verdict, flags.
+    #[command(
+        long_about = render::board_help(),
+        after_help = "Examples:\n  andon board\n  andon board --seat proj-1a\n  andon board --all --json | jq '.seats[].flags'"
+    )]
     Board {
         /// Only this seat's row.
         #[arg(long)]
@@ -82,13 +109,17 @@ pub enum Command {
         /// Every seat, the quiet ones too.
         #[arg(long)]
         all: bool,
+        /// Print the board as JSON (board schema 4, every seat), not text.
         #[arg(long)]
         json: bool,
     },
-    /// The board as it stood at an instant (a date means its end).
+    /// The board as it stood at an instant, replayed from the ledger.
+    #[command(
+        after_help = "Examples:\n  andon asof yesterday         the end of yesterday\n  andon asof 2026-10-24        the end of that day\n  andon asof 2026-10-24T09:30  local time\n  andon asof -6h               six hours ago"
+    )]
     Asof {
         /// The instant: a date (its end), a time (local, or with Z or an
-        /// offset), yesterday, or -6h.
+        /// offset), now, today, yesterday, -6h or -2d.
         #[arg(allow_hyphen_values = true)]
         when: String,
         /// Only this seat's row.
@@ -97,17 +128,39 @@ pub enum Command {
         /// Every seat, the quiet ones too.
         #[arg(long)]
         all: bool,
+        /// Print the board as JSON (board schema 4, every seat), not text.
         #[arg(long)]
         json: bool,
     },
-    /// Print the ledger as JSONL, for a project to keep.
-    Ledger {
-        /// Only events at or after this instant or date (local), or -6h.
-        #[arg(long, allow_hyphen_values = true)]
-        since: Option<String>,
+    /// The four laws' gauges per seat over a window, today by default.
+    #[command(
+        long_about = render::scorecard_help(),
+        after_help = "Examples:\n  andon scorecard                      today so far\n  andon scorecard yesterday\n  andon scorecard 7d                   the last seven days\n  andon scorecard 2026-10-11..2026-10-12"
+    )]
+    Scorecard {
+        /// The window: a day (2026-10-24, today, yesterday), FROM..TO,
+        /// FROM.., or the last 6h or 2d. Dates are local days.
+        #[arg(default_value = "today", allow_hyphen_values = true)]
+        window: String,
+        /// Print the scorecard as JSON (scorecard schema 2), not text.
+        #[arg(long)]
+        json: bool,
     },
-    /// Read a harness hook's JSON on stdin; print the seat's row and what
-    /// changed since its last turn. Never fails a session.
+    /// A refusal for a choke point: exit 1 and one line naming the fix, or exit 0.
+    #[command(
+        after_help = "Examples:\n  andon check commit @                in the land verb, before it moves trunk\n  andon check goal proj-abc           when a goal is filed\n  andon check message ask --goal proj-abc"
+    )]
+    Check {
+        #[command(subcommand)]
+        what: CheckCommand,
+    },
+    /// The seat's row and what changed since its last turn, for a harness hook.
+    ///
+    /// Reads the hook's JSON payload on stdin and never fails a session: a
+    /// problem is one line in the agent's context, and exit 0.
+    #[command(
+        after_help = "Wire it as a Claude Code UserPromptSubmit or SessionStart hook, or a Codex\nhook, with the command `andon hook`. Check the wiring with:\n  echo '<payload>' | andon hook --check"
+    )]
     Hook {
         /// Check the wiring instead: report the config, seat, workspace and
         /// transcript this payload resolves to, and exit 1 naming the fix
@@ -115,12 +168,17 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// A refusal for a choke point: exit 1 and name the fix, or exit 0.
-    Check {
-        #[command(subcommand)]
-        what: CheckCommand,
+    /// Print the event ledger as JSONL, for a project to keep and replay.
+    #[command(
+        after_help = "Examples:\n  andon ledger > ledger.jsonl\n  andon --ledger ledger.jsonl asof 2026-10-12\n  andon ledger --since -1d"
+    )]
+    Ledger {
+        /// Only events at or after this instant or date (local), or -6h.
+        #[arg(long, allow_hyphen_values = true)]
+        since: Option<String>,
     },
     /// Print a starter andon.toml (redirect it into place).
+    #[command(after_help = "Example:\n  andon init > andon.toml")]
     Init,
 }
 
@@ -128,18 +186,25 @@ pub enum Command {
 pub enum CheckCommand {
     /// The commit cites a goal its seat has claimed, within the seat's WIP.
     Commit {
-        /// A revision (jj revset naming one commit).
+        /// A revision: a jj revset naming one commit (`@`, a change id), or
+        /// a git revision with [adapters.git].
         rev: String,
         /// The committing seat, when the commit's trailers do not name it.
         #[arg(long)]
         seat: Option<String>,
     },
     /// The goal has its sections, a done-when that can fail, a finite
-    /// budget, and room in its pool. `-` reads a description on stdin.
-    Goal { id: String },
+    /// budget, and room in its pool.
+    Goal {
+        /// The goal's tracker id, or `-` to read a description on stdin.
+        id: String,
+    },
     /// A decision kind names the goal it serves.
     Message {
+        /// The message's kind (`ask`); `[messages] decision_kinds` must name
+        /// a goal.
         kind: String,
+        /// The goal the message serves.
         #[arg(long)]
         goal: Option<String>,
         /// The message's headline and body, searched for a goal id.
@@ -153,6 +218,15 @@ pub enum CheckCommand {
 pub fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
+        // help and version print, for the hook as for any command
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            error.exit()
+        }
         // a hook must never fail a session, not even on a bad command line
         Err(_) if std::env::args().nth(1).as_deref() == Some("hook") => return ExitCode::SUCCESS,
         Err(error) => error.exit(),
@@ -178,7 +252,13 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
         all,
         ..display(cli)
     };
-    match &cli.command {
+    // no command is the board, now
+    let board = Command::Board {
+        seat: None,
+        all: false,
+        json: false,
+    };
+    match cli.command.as_ref().unwrap_or(&board) {
         Command::Hook { check } => hook(cli, *check, out),
         Command::Check { what } => {
             let now = clock();
