@@ -4,6 +4,20 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- **`andon goals`, `andon seats` and `andon doctor`.**
+  - `goals`: the list: who holds each goal, claimed or not, budget spent
+    of allowed, the time since the claim. `--seat`, `--all`, `--json`
+    (schema 1).
+  - `seats`: the roster: each seat's aliases, workspace, live session and
+    what joined to it, then every name that joins no seat, with the fix.
+  - `doctor`: what each source read (events, span covered, gaps, time) or
+    its whole error, then the hook's wiring. It exits 1 naming the fix
+    when a source cannot be read.
+- **`andon init` detects the repository:** its name, jj or git and the
+  trunk, bd's issue prefix for `goal_pattern`, jj workspaces as seats,
+  Claude Code's session files, hail and Ferry. Messages use hail 0.7's
+  `decision_kinds = ["ask"]`.
+
 - **A board in seconds, with progress.** On a terminal, stderr shows
   `reading 4/7 · sessions, bd · 3.1s` while sources are read. `--timings`
   prints each source's read time and event count to stderr after the

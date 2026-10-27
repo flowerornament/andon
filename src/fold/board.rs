@@ -582,38 +582,7 @@ fn goals(
     config: &Config,
 ) -> Vec<Goal> {
     let mut goals: Vec<Goal> = held(items, seat)
-        .map(|(id, item)| {
-            let (amount, unit) = item
-                .budget
-                .as_deref()
-                .and_then(crate::goal::parse_budget)
-                .map_or((None, None), |(n, u)| (Some(n), Some(u)));
-            let unit_read = unit.as_deref().unwrap_or(&config.board.budget_unit);
-            let spec = match unit_read {
-                "runs" => &USED_RUNS,
-                "wall-clock" => &USED_WALL,
-                _ => &USED,
-            };
-            let used = g.gauge(
-                spec,
-                Some(seat),
-                item.claimed_at,
-                item.claimed_at
-                    .map_or(0.0, |claimed| spent(unit_read, events, claimed, g.to)),
-            );
-            Goal {
-                id: id.clone(),
-                title: item.title.clone(),
-                claimed_at: item.claimed_at,
-                budget: item.budget.clone(),
-                counts: item.in_progress(config),
-                used_unit: unit_read.to_owned(),
-                amount,
-                unit,
-                used,
-                last_work: None,
-            }
-        })
+        .map(|(id, item)| goal_of(g, seat, id, item, events, config))
         .collect();
     // the goal the seat is working on leads: the one its latest commits
     // cite; the claim order only breaks ties (a fresh claim with no work yet
@@ -633,6 +602,49 @@ fn goals(
             .then_with(|| a.id.cmp(&b.id))
     });
     goals
+}
+
+/// One goal `seat` holds, with its budget spent since the claim, at the
+/// gauger's instant; `events` are the seat's.
+#[must_use]
+pub fn goal_of(
+    g: &Gauger<'_>,
+    seat: &str,
+    id: &str,
+    item: &Item,
+    events: &[&Event],
+    config: &Config,
+) -> Goal {
+    let (amount, unit) = item
+        .budget
+        .as_deref()
+        .and_then(crate::goal::parse_budget)
+        .map_or((None, None), |(n, u)| (Some(n), Some(u)));
+    let unit_read = unit.as_deref().unwrap_or(&config.board.budget_unit);
+    let spec = match unit_read {
+        "runs" => &USED_RUNS,
+        "wall-clock" => &USED_WALL,
+        _ => &USED,
+    };
+    let used = g.gauge(
+        spec,
+        Some(seat),
+        item.claimed_at,
+        item.claimed_at
+            .map_or(0.0, |claimed| spent(unit_read, events, claimed, g.to)),
+    );
+    Goal {
+        id: id.to_owned(),
+        title: item.title.clone(),
+        claimed_at: item.claimed_at,
+        budget: item.budget.clone(),
+        counts: item.in_progress(config),
+        used_unit: unit_read.to_owned(),
+        amount,
+        unit,
+        used,
+        last_work: None,
+    }
 }
 
 /// Effort since `from`: session hours, wall-clock hours or runs.

@@ -50,14 +50,28 @@ fn no_config_exits_2_and_names_the_fix() {
 #[test]
 fn init_prints_a_config_that_andon_reads() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let out = andon(&["init"], dir.path());
+    // a home of its own, so the sources init points at are this test's
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_andon"))
+            .args(args)
+            .current_dir(dir.path())
+            .env("HOME", dir.path())
+            .env("ANDON_CACHE", "off")
+            .output()
+            .unwrap_or_else(|error| panic!("andon did not run: {error}"))
+    };
+    let out = run(&["init"]);
     assert!(out.status.success());
+    // an empty directory has no jj or git: init says so, and names no
+    // source it did not find, so the board draws from what is there
+    assert!(
+        stdout(&out).contains("# no .jj or .git here"),
+        "{}",
+        stdout(&out)
+    );
     std::fs::write(dir.path().join("andon.toml"), &out.stdout).unwrap_or_else(|e| panic!("{e}"));
-    // the starter names jj and bd, which an empty directory lacks: andon says
-    // it cannot decide rather than drawing an empty board
-    let board = andon(&["board"], dir.path());
-    assert_eq!(board.status.code(), Some(2));
-    assert!(stdout(&board).starts_with("andon: cannot decide: adapter jj"));
+    let board = run(&["board"]);
+    assert_eq!(board.status.code(), Some(0), "{}", stdout(&board));
 }
 
 #[test]

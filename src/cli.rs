@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
-use crate::config::{self, Config};
+use crate::config::Config;
 use crate::ledger::Ledger;
 use crate::time::{Window, endpoint_in};
 use crate::{adapters, fold, render};
@@ -181,7 +181,37 @@ pub enum Command {
         #[arg(long, allow_hyphen_values = true)]
         since: Option<String>,
     },
-    /// Print a starter andon.toml (redirect it into place).
+    /// The goals: open ones by default, who holds each, budget spent of
+    /// allowed, and how long since the claim.
+    #[command(
+        after_help = "Examples:\n  andon goals\n  andon goals --seat proj-1a\n  andon goals --all --json | jq '.goals[].id'"
+    )]
+    Goals {
+        /// Only the goals this seat (or identity) holds.
+        #[arg(long)]
+        seat: Option<String>,
+        /// Closed goals too.
+        #[arg(long)]
+        all: bool,
+        /// The list as JSON (schema 1).
+        #[arg(long)]
+        json: bool,
+    },
+    /// The seats: the names that join to each, where it works, its live
+    /// session and what joined to it lately; then names that join no seat.
+    #[command(after_help = "Examples:\n  andon seats\n  andon seats --json")]
+    Seats {
+        /// The roster as JSON (schema 1).
+        #[arg(long)]
+        json: bool,
+    },
+    /// What each configured source read, in full: events, the span it
+    /// covers, its gaps and its time, or its whole error; then the hook's
+    /// wiring. Exits 1, naming the fix, when a source cannot be read.
+    #[command(after_help = "Example:\n  andon doctor")]
+    Doctor,
+    /// Print an andon.toml for this repository, from what it finds here
+    /// (redirect it into place).
     #[command(after_help = "Example:\n  andon init > andon.toml")]
     Init,
 }
@@ -294,10 +324,10 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
                 ExitCode::SUCCESS
             })
         }
-        Command::Init => {
-            out.write_all(config::STARTER.as_bytes())?;
-            Ok(ExitCode::SUCCESS)
-        }
+        Command::Init => init(out),
+        Command::Goals { seat, all, json } => goals(cli, out, seat.as_deref(), *all, *json),
+        Command::Seats { json } => seats(cli, out, *json),
+        Command::Doctor => doctor(cli, out),
         Command::Ledger { since } => {
             let config = load_config(cli, clock())?;
             let ledger = load_ledger(cli, &config)?;
@@ -562,6 +592,69 @@ pub fn load_config(cli: &Cli, capture: Timestamp) -> Result<Config> {
     let mut config = Config::load(&path)?;
     config.capture = Some(capture);
     Ok(config)
+}
+
+/// `andon init`: a config for the repository here.
+fn init(out: &mut dyn Write) -> Result<ExitCode> {
+    let here = std::env::current_dir().context("no working directory")?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let found = crate::init::detect(&here, home.as_deref());
+    out.write_all(crate::init::config(&found).as_bytes())?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `andon goals`.
+fn goals(
+    cli: &Cli,
+    out: &mut dyn Write,
+    seat: Option<&str>,
+    all: bool,
+    json: bool,
+) -> Result<ExitCode> {
+    let now = clock();
+    let config = load_config(cli, now)?;
+    let ledger = load_ledger(cli, &config)?;
+    let list = fold::goals::goals(&ledger, &config, now, &fold::goals::Ask { all, seat });
+    if json {
+        writeln!(out, "{}", serde_json::to_string(&list)?)?;
+    } else {
+        out.write_all(crate::listing::goals(&list, &display(cli)).as_bytes())?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `andon seats`.
+fn seats(cli: &Cli, out: &mut dyn Write, json: bool) -> Result<ExitCode> {
+    let now = clock();
+    let config = load_config(cli, now)?;
+    let ledger = load_ledger(cli, &config)?;
+    let roster = fold::seats::roster(&ledger, &config, now);
+    if json {
+        writeln!(out, "{}", serde_json::to_string(&roster)?)?;
+    } else {
+        out.write_all(crate::listing::seats(&roster, &display(cli)).as_bytes())?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `andon doctor`.
+fn doctor(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
+    let now = clock();
+    let here = std::env::current_dir().context("no working directory")?;
+    let path = match &cli.config {
+        Some(p) => p.clone(),
+        None => Config::find(&here).ok_or_else(|| {
+            anyhow!("no andon.toml here or above; create one: andon init > andon.toml")
+        })?,
+    };
+    let config = load_config(cli, now)?;
+    let (report, ok) = crate::doctor::doctor(&path, &config, &here, now, &display(cli));
+    out.write_all(report.as_bytes())?;
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 /// The ledger: read from `--ledger`, else collected from the sources.

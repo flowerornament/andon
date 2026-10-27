@@ -14,7 +14,8 @@ const LAYERS: &[&[&str]] = &[
     &["adapters"],
     &["fold"],
     &["check", "render"],
-    &["hook"],
+    &["hook", "listing"],
+    &["doctor", "init"],
     &["cli"],
 ];
 

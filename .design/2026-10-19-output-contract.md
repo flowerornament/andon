@@ -154,3 +154,23 @@ one flag for all the seats a row overlaps; `overlaps[]` still lists every
 path. The scorecard's text columns `no-reason`, `goal%` and
 `asks-no-goal` are now `unexplained`, `on-goal` and `asks-off-goal`; its
 text is unversioned and its JSON stays at schema 2.
+
+## Amendment: goals and seats, schema 1 each (2026-10-27, andon-2fh)
+
+`andon goals --json` and `andon seats --json` are new outputs, each with
+its own `schema: 1`. `tests/schema.rs` records their fields.
+
+- **goals:** `schema`, `asof`, `goals[]`, a gauge over the tracker's state.
+  Each entry has `id`, `title`, `status` (`open`, `claimed` or `closed`),
+  `owner`, `seated` (whether the owner is a configured seat), `item_type`,
+  `created_at`, `claimed_at`, `closed_at`, `budget` (as written), `amount`,
+  `unit` (the unit `used` counts in) and `used` (a gauge, or `null` for a
+  goal not claimed).
+- **seats:** `schema`, `asof`, `window_hours`, and `seats[]`. Each seat has
+  `seat`, `aliases`, `prefixes`, `workspace`, `session` (`status`, `since`,
+  `sessions`, or `null`) and `joined{kind}` (the facts in the window that
+  joined to it). Then `unseated[]`: each name recorded that joins no seat,
+  with `identity`, `facts{kind}` and `fix`.
+
+`andon doctor` is text for people, not a contract; its exit code is: 0
+when every configured source reads, 1 naming the fix otherwise.

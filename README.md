@@ -62,12 +62,17 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
 | `andon check goal ID` | The goal has its sections, a done-when that can fail, a finite budget, and room in its pool. |
 | `andon check message KIND` | A decision names the goal it serves. |
 | `andon hook` | The seat's row for a harness hook. Never fails a session. |
+| `andon goals [--seat S] [--all] [--json]` | The goals: open ones by default, who holds each (a name that is no seat is marked `*`), claimed or not, budget spent of allowed, and how long since the claim. |
+| `andon seats [--json]` | The roster: each seat's aliases and prefixes, where it works, its live session and what joined to it in the window; then every name the sources recorded that joins no seat, with the fix. |
+| `andon doctor` | What each configured source read: its events, the span it covers, its gaps and its time, or its whole error; then the hook's wiring. Exits 1, naming the fix, when a source cannot be read. |
 | `andon ledger` | Every event as JSONL, to keep; `--ledger FILE` reads it back instead of the sources. |
-| `andon init` | A starter `andon.toml`. |
+| `andon init` | An `andon.toml` for this repository, from what it finds: its name, jj or git and the trunk, bd's issue prefix, jj workspaces as seats, Claude Code's session files and hail. |
 
 **Times.** Text prints times in the local zone, with the zone named; `TZ=UTC andon …` prints UTC, and `--json` is always UTC. A time is a date (`2026-10-24`), a local time (`2026-10-24T09:30`), an exact one (`…Z` or an offset), `now`, `today`, `yesterday`, `-6h` or `-2d`. A window is a day, `FROM..TO`, `FROM..`, or the last `6h` or `2d`.
 
-**Output.** On a terminal the board fits the width and is colored (`--color auto|always|never`; `NO_COLOR` is honored). Piped, it is plain text that is never cut. `--json` and the hook's line follow a versioned contract (`.design/2026-10-19-output-contract.md`).
+**Output.** On a terminal the board fits the width and is colored (`--color auto|always|never`; `NO_COLOR` is honored). Piped, it is plain text that is never cut. `--json` and the hook's line follow a versioned contract (`.design/2026-10-19-output-contract.md`). While sources are read, a terminal's stderr shows one progress line; `--timings` prints each source's read time and event count to stderr after the output.
+
+**Cache.** andon writes into no repository or tracker. To read in seconds it keeps transcript parses, jj's operation log and bd's event rows under `~/.cache/andon` (`$XDG_CACHE_HOME/andon`, or `$ANDON_CACHE`), each checked against its source before use: deleting it changes no output, and `ANDON_CACHE=off` keeps nothing.
 
 **Exit codes.** 0 rendered or passed; 1 a check refused, and stdout names the fix in one line; 2 andon could not decide, and the line says what to repair.
 

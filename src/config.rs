@@ -795,44 +795,6 @@ pub fn wildcard(pattern: &str, label: &str) -> bool {
     true
 }
 
-/// The starter config `andon init` prints.
-pub const STARTER: &str = r#"# andon.toml: how this project's artifacts name seats, goals and verdicts.
-# andon reads the sources below and writes nothing; see `andon --help`.
-
-[project]
-name = "my-project"
-# A goal id as it appears in commit subjects and messages.
-goal_pattern = '\bmy-project-[a-z0-9]{3,6}\b'
-# The gate recipe that is the land verb: its refusals are "last land refused".
-land_recipe = "land"
-
-# Identity first: every fact joins to a seat by the name its tool recorded.
-# Each agent must act under its seat's name: with bd, set BEADS_ACTOR=<seat>
-# in the seat's environment, or bd records your git user, which is no seat.
-#
-# One table per seat. aliases: exact labels (trailer values, tracker actors,
-# message labels). prefixes: workspace names that belong to the seat.
-[seats.my-project-1a]
-aliases = ["my-project-1a"]
-prefixes = ["my-project-1a-"]
-
-# The goal schema: `check commit` and `check goal` hold work to it, and the
-# board shows goals and budgets. Remove [goal] for a board without them.
-[goal]
-sections = ["Why", "Done when", "Budget"]
-wip_per_seat = 1
-
-[messages]
-decision_kinds = ["ask", "go", "nogo", "ruling", "block", "stop"]
-
-[adapters.jj]
-repo = "."
-trunk = "main"
-
-[adapters.bd]
-dir = "."
-"#;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,14 +808,6 @@ mod tests {
         assert!(wildcard("x*-1*", "x-1a"));
         assert!(wildcard("exact", "exact"));
         assert!(!wildcard("exact", "exactly"));
-    }
-
-    #[test]
-    fn the_starter_config_parses() {
-        let config = Config::parse(STARTER, Path::new("/repo")).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(config.seats.len(), 1);
-        assert_eq!(config.goal.wip_per_seat, 1);
-        assert_eq!(config.path("src"), PathBuf::from("/repo/src"));
     }
 
     #[test]

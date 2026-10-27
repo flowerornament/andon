@@ -62,11 +62,48 @@ pub fn collect_for_seat(
     Ok(resolve(config, events))
 }
 
+/// One adapter's read: its name, how long it took, and what it read.
+pub struct AdapterRead {
+    pub name: String,
+    pub wall: std::time::Duration,
+    pub got: Result<Vec<Event>>,
+}
+
+/// Every configured core and external adapter, each read on its own (for
+/// `doctor`): a failure is that adapter's result, not the read's.
+#[must_use]
+pub fn read_each(config: &Config) -> Vec<AdapterRead> {
+    read_all(config, true, Some(&sessions::Scope::default()))
+}
+
 fn run_adapters(
     config: &Config,
     messages: bool,
     sessions: Option<&sessions::Scope>,
 ) -> Result<Vec<Event>> {
+    let mut events: Vec<Event> = Vec::new();
+    for read in read_all(config, messages, sessions) {
+        let name = read.name;
+        let mut got = read
+            .got
+            .with_context(|| format!("adapter {name} (see its [adapters] table in andon.toml)"))?;
+        // every coverage fact names the adapter that read it; an external
+        // adapter's events already carry its own name
+        for e in got.iter_mut().filter(|e| {
+            e.kind == crate::event::Kind::Coverage && e.attr_str(attr::ADAPTER).is_none()
+        }) {
+            e.set_attr(attr::ADAPTER, name.clone());
+        }
+        events.extend(got);
+    }
+    Ok(events)
+}
+
+fn read_all(
+    config: &Config,
+    messages: bool,
+    sessions: Option<&sessions::Scope>,
+) -> Vec<AdapterRead> {
     type Job<'a> = (
         String,
         Box<dyn Fn() -> Result<Vec<Event>> + Send + Sync + 'a>,
@@ -121,7 +158,7 @@ fn run_adapters(
     // adapters read independent sources: run them at once; the ledger's sort
     // makes the result independent of which finishes first
     let read = progress::Read::new(jobs.iter().map(|(name, _)| name.clone()).collect());
-    let results: Vec<(String, Result<Vec<Event>>)> = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let read = &read;
         let handles: Vec<_> = jobs
             .iter()
@@ -131,9 +168,10 @@ fn run_adapters(
                     // a reader that stops still finishes, or the line would
                     // wait for it forever
                     let guard = read.guard(i);
+                    let started = std::time::Instant::now();
                     let got = job();
                     guard.done(got.as_ref().ok().map(Vec::len));
-                    got
+                    (started.elapsed(), got)
                 })
             })
             .collect();
@@ -142,27 +180,20 @@ fn run_adapters(
         jobs.iter()
             .zip(handles)
             .map(|((name, _), h)| {
-                let got = h
-                    .join()
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("the adapter stopped unexpectedly")));
-                (name.clone(), got)
+                let (wall, got) = h.join().unwrap_or_else(|_| {
+                    (
+                        std::time::Duration::ZERO,
+                        Err(anyhow::anyhow!("the adapter stopped unexpectedly")),
+                    )
+                });
+                AdapterRead {
+                    name: name.clone(),
+                    wall,
+                    got,
+                }
             })
             .collect()
-    });
-    let mut events: Vec<Event> = Vec::new();
-    for (name, got) in results {
-        let mut got = got
-            .with_context(|| format!("adapter {name} (see its [adapters] table in andon.toml)"))?;
-        // every coverage fact names the adapter that read it; an external
-        // adapter's events already carry its own name
-        for e in got.iter_mut().filter(|e| {
-            e.kind == crate::event::Kind::Coverage && e.attr_str(attr::ADAPTER).is_none()
-        }) {
-            e.set_attr(attr::ADAPTER, name.clone());
-        }
-        events.extend(got);
-    }
-    Ok(events)
+    })
 }
 
 /// Resolve seats on raw events and build the ledger.

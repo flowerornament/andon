@@ -54,7 +54,12 @@ fn fields(v: &Value, path: &str, out: &mut BTreeSet<String>) {
             out.insert(path.to_owned());
         }
         Value::Object(map) => {
-            let keyed = MAPS.iter().any(|m| path.ends_with(m)) && !path.contains("seats.*.");
+            // `joined` and `facts` are keyed by kind wherever they are
+            let keyed = (MAPS.iter().any(|m| path.ends_with(m)) && !path.contains("seats.*."))
+                || path
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|k| k == "joined" || k == "facts");
             for (k, x) in map {
                 let p = if keyed { join("*") } else { join(k) };
                 out.insert(p.clone());
@@ -315,12 +320,82 @@ fn columns(schema: &Value) -> &'static [&'static str] {
     }
 }
 
+/// `andon goals --all` and `andon seats` over the same ledger.
+fn lists() -> (Value, Value) {
+    let config = common::config("[goal]\n[seats.x-1a]\n[seats.x-1b]\n", Path::new("/"));
+    let ledger = adapters::resolve(
+        &config,
+        Ledger::read(LEDGER.as_bytes())
+            .unwrap_or_else(|e| panic!("{e}"))
+            .events()
+            .to_vec(),
+    );
+    let at = parse_instant("2026-10-13T12:00:00Z").unwrap_or_else(|e| panic!("{e}"));
+    let ask = andon::fold::goals::Ask {
+        all: true,
+        seat: None,
+    };
+    (
+        serde_json::to_value(andon::fold::goals::goals(&ledger, &config, at, &ask))
+            .unwrap_or_default(),
+        serde_json::to_value(andon::fold::seats::roster(&ledger, &config, at)).unwrap_or_default(),
+    )
+}
+
+/// `andon goals --json`, schema 1.
+const GOALS_V1: &[&str] = &[
+    "asof",
+    "goals",
+    "goals.*",
+    "goals.*.amount",
+    "goals.*.budget",
+    "goals.*.claimed_at",
+    "goals.*.closed_at",
+    "goals.*.created_at",
+    "goals.*.id",
+    "goals.*.item_type",
+    "goals.*.owner",
+    "goals.*.seated",
+    "goals.*.status",
+    "goals.*.title",
+    "goals.*.unit",
+    "goals.*.used",
+    "schema",
+];
+
+/// `andon seats --json`, schema 1.
+const SEATS_V1: &[&str] = &[
+    "asof",
+    "schema",
+    "seats",
+    "seats.*",
+    "seats.*.aliases",
+    "seats.*.joined",
+    "seats.*.joined.*",
+    "seats.*.prefixes",
+    "seats.*.seat",
+    "seats.*.session",
+    "seats.*.session.sessions",
+    "seats.*.session.since",
+    "seats.*.session.status",
+    "seats.*.workspace",
+    "unseated",
+    "unseated.*",
+    "unseated.*.facts",
+    "unseated.*.facts.*",
+    "unseated.*.fix",
+    "unseated.*.identity",
+    "window_hours",
+];
+
 /// The recorded fields for an output's schema number.
 fn recorded(what: &str, schema: &Value) -> &'static [&'static str] {
     match (what, schema.as_u64()) {
         ("board", Some(2)) => BOARD_V2,
         ("board", Some(3 | 4)) => BOARD_V3,
         ("scorecard", Some(2)) => SCORECARD_V2,
+        ("goals", Some(1)) => GOALS_V1,
+        ("seats", Some(1)) => SEATS_V1,
         (_, n) => panic!(
             "{what} schema {n:?} has no recorded fields; record them here and in .design/2026-10-19-output-contract.md"
         ),
@@ -330,7 +405,13 @@ fn recorded(what: &str, schema: &Value) -> &'static [&'static str] {
 #[test]
 fn json_fields_change_only_with_the_schema_number() {
     let (b, c) = outputs();
-    for (what, v) in [("board", &b), ("scorecard", &c)] {
+    let (g, r) = lists();
+    for (what, v) in [
+        ("board", &b),
+        ("scorecard", &c),
+        ("goals", &g),
+        ("seats", &r),
+    ] {
         let expected: Vec<String> = recorded(what, &v["schema"])
             .iter()
             .map(|s| (*s).to_owned())
