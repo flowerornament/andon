@@ -4,6 +4,28 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+## v0.4.0 - 2026-10-27
+
+A first-class interface (`.design/2026-10-27-first-class-interface.md`):
+a board that reads in seconds and fits its terminal, color and plain
+names, time in the reader's zone, help that explains itself, and new
+`goals`, `seats` and `doctor` commands.
+
+Upgrading from 0.3:
+
+- The board moves to schema 4. No JSON field changes, but the text
+  column names do (`landed`, `unlanded`, `comments`), and so do the
+  labels on the hook's line. Anything that matches the old labels needs
+  updating.
+- Dates and zone-less times are read in the local zone. `scorecard
+  yesterday` now means your local yesterday, not the UTC one, so its
+  numbers can differ from 0.3's. `TZ=UTC andon ...` gives the old view.
+- `andon` keeps a cache under `~/.cache/andon` (or `$XDG_CACHE_HOME`,
+  `$ANDON_CACHE`). Deleting it changes no output; `ANDON_CACHE=off`
+  keeps nothing.
+- `andon` with no command prints the board, and `scorecard` with no
+  window covers today.
+
 - **`andon goals`, `andon seats` and `andon doctor`.**
   - `goals`: the goals someone holds, who holds each, budget spent of
     allowed and the time since the claim, then one line counting the open
@@ -73,6 +95,13 @@ All notable changes to `andon` are documented in this file.
   times UTC.
 - Fixed: `asof 2026-10-24` showed the board at that date's start; a date
   means its end, as `asof --help` says.
+- `seats`, `doctor` and the scorecard fit an 80-column terminal: paths
+  print as `~/…` and give way from the left, notes wrap, and today's
+  scorecard reads "so far" in its header instead of adding a note. The
+  names `seats` asks you to fix leave out presence (read machine-wide) and
+  names that only sent messages, which are listed apart. A `?` reason
+  that a source is read from a date names the fix: an earlier `since`.
+- `--help` wraps to the terminal, and each command's summary is one line.
 
 ## v0.3.0 - 2026-10-19
 
