@@ -215,18 +215,20 @@ fn asof_a_date_is_its_end_in_the_readers_zone() {
             serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", stdout(&out)));
         board["asof"].as_str().unwrap_or_default().to_owned()
     };
-    // a date was once read as its start, though its help says its end
+    // a date was once read as its start, though its help says its end; the
+    // zone is a POSIX rule, which needs no zone database (a build sandbox
+    // has none)
     assert_eq!(asof("UTC", "2026-10-24"), "2026-10-25T00:00:00Z");
     assert_eq!(
-        asof("America/Los_Angeles", "2026-10-24"),
+        asof("PST8PDT,M3.2.0,M11.1.0", "2026-10-24"),
         "2026-10-25T07:00:00Z"
     );
     assert_eq!(
-        asof("America/Los_Angeles", "2026-10-24T12:00"),
+        asof("PST8PDT,M3.2.0,M11.1.0", "2026-10-24T12:00"),
         "2026-10-24T19:00:00Z"
     );
     assert_eq!(
-        asof("America/Los_Angeles", "2026-10-24T12:00Z"),
+        asof("PST8PDT,M3.2.0,M11.1.0", "2026-10-24T12:00Z"),
         "2026-10-24T12:00:00Z"
     );
 }

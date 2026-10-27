@@ -259,6 +259,9 @@ pub fn minutes(from: Timestamp, to: Timestamp) -> f64 {
 mod tests {
     use super::*;
 
+    /// Los Angeles as a POSIX rule: a build sandbox has no zone database.
+    const LOS_ANGELES: &str = "PST8PDT,M3.2.0,M11.1.0";
+
     fn ts(s: &str) -> Timestamp {
         parse_instant(s).unwrap_or_else(|e| panic!("{e}"))
     }
@@ -284,7 +287,7 @@ mod tests {
     #[test]
     fn a_typed_date_is_read_in_the_readers_zone() {
         let now = ts("2026-10-27T06:42:00Z");
-        let pdt = TimeZone::get("America/Los_Angeles").unwrap_or_else(|e| panic!("{e}"));
+        let pdt = TimeZone::posix(LOS_ANGELES).unwrap_or_else(|e| panic!("{e}"));
         let at = |text: &str, end: bool| {
             endpoint_in(text, now, &pdt, end).unwrap_or_else(|e| panic!("{e}"))
         };

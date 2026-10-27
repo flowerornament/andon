@@ -1325,6 +1325,9 @@ fn unseated(board: &Board, display: &Display) -> String {
 mod tests {
     use super::*;
 
+    /// Los Angeles as a POSIX rule: a build sandbox has no zone database.
+    const LOS_ANGELES: &str = "PST8PDT,M3.2.0,M11.1.0";
+
     #[test]
     fn tables_align_text_left_and_numbers_right() {
         let row = |a: &str, b: &str, c: &str| vec![a.to_owned(), b.to_owned(), c.to_owned()];
@@ -1366,7 +1369,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(Display::utc().time(t), "2026-10-27 06:42 UTC");
         let pdt = Display {
-            zone: TimeZone::get("America/Los_Angeles").unwrap_or_else(|e| panic!("{e}")),
+            zone: TimeZone::posix(LOS_ANGELES).unwrap_or_else(|e| panic!("{e}")),
             ..Display::utc()
         };
         assert_eq!(pdt.time(t), "2026-10-26 23:42 PDT");
