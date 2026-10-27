@@ -18,18 +18,35 @@ pub fn table(rows: &[Vec<String>]) -> String {
     let Some(header) = rows.first() else {
         return String::new();
     };
-    let columns = header.len();
-    let mut widths = vec![0; columns];
-    let mut numeric = vec![true; columns];
-    for (r, row) in rows.iter().enumerate() {
-        for (i, cell) in row.iter().enumerate().take(columns) {
-            widths[i] = widths[i].max(cell.chars().count());
-            if r > 0 && cell != "—" && cell != "?" && !looks_numeric(cell) {
+    let mut numeric = vec![true; header.len()];
+    for row in rows.iter().skip(1) {
+        for (i, cell) in row.iter().enumerate().take(numeric.len()) {
+            if cell != "—" && cell != "?" && !looks_numeric(cell) {
                 numeric[i] = false;
             }
         }
     }
     numeric[0] = false;
+    aligned(rows, &numeric)
+}
+
+/// Align rows into columns, right-aligning where `right` says; the first row
+/// is the header, and the last column is free text.
+#[must_use]
+pub fn aligned(rows: &[Vec<String>], right: &[bool]) -> String {
+    let Some(header) = rows.first() else {
+        return String::new();
+    };
+    let columns = header.len();
+    let mut widths = vec![0; columns];
+    for row in rows {
+        for (i, cell) in row.iter().enumerate().take(columns) {
+            widths[i] = widths[i].max(cell.chars().count());
+        }
+    }
+    let numeric: Vec<bool> = (0..columns)
+        .map(|i| right.get(i).copied().unwrap_or(false))
+        .collect();
     let mut out = String::new();
     for row in rows {
         let mut line = String::new();
@@ -38,10 +55,10 @@ pub fn table(rows: &[Vec<String>]) -> String {
                 line.push_str("  ");
             }
             let width = widths[i];
-            if i + 1 == columns {
-                line.push_str(cell);
-            } else if numeric[i] {
+            if numeric[i] {
                 let _ = write!(line, "{cell:>width$}");
+            } else if i + 1 == columns {
+                line.push_str(cell);
             } else {
                 let _ = write!(line, "{cell:<width$}");
             }
@@ -64,6 +81,11 @@ fn looks_numeric(cell: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct Display {
     pub zone: TimeZone,
+    /// The columns text must fit, on a terminal or with `COLUMNS` set;
+    /// `None` when piped, where nothing is cut.
+    pub width: Option<usize>,
+    /// Show every seat, the quiet ones too (`--all`, `--seat`).
+    pub all: bool,
 }
 
 impl Display {
@@ -72,14 +94,22 @@ impl Display {
     pub fn utc() -> Self {
         Self {
             zone: TimeZone::UTC,
+            width: None,
+            all: false,
         }
     }
 
-    /// The reader's local zone (`TZ` honored).
+    /// The reader's local zone (`TZ` honored), and the width of the
+    /// terminal stdout is, if it is one (`COLUMNS` overrides).
     #[must_use]
     pub fn local() -> Self {
+        let columns = std::env::var("COLUMNS").ok().and_then(|c| c.parse().ok());
+        let terminal =
+            || terminal_size::terminal_size_of(std::io::stdout()).map(|(w, _)| usize::from(w.0));
         Self {
             zone: TimeZone::system(),
+            width: columns.or_else(terminal).filter(|w| *w >= 20),
+            all: false,
         }
     }
 
@@ -173,56 +203,67 @@ fn count(g: &Gauge<usize>) -> String {
 pub const SCORECARD: &[Column<SeatCard>] = &[
     Column {
         name: "seat",
+        right: false,
         help: "the seat, then the unattributed and total rows.",
         cell: |c, _| c.name.clone(),
     },
     Column {
         name: "lands",
+        right: true,
         help: "landings on the trunk.",
         cell: |c, _| count(&c.landings),
     },
     Column {
         name: "runs",
+        right: true,
         help: "runner runs.",
         cell: |c, _| c.runs.cell(|r| r.total.to_string()),
     },
     Column {
         name: "fail",
+        right: true,
         help: "runs that failed.",
         cell: |c, _| c.runs.cell(|r| r.fail.to_string()),
     },
     Column {
         name: "no-reason",
+        right: true,
         help: "failed runs that kept neither a reason nor an output tail.",
         cell: |c, _| c.runs.cell(|r| r.fail_without_reason.to_string()),
     },
     Column {
         name: "runs/land",
+        right: true,
         help: "runs per landing (— with no landing).",
         cell: |c, _| c.runs_per_landing.cell(|v| opt(*v)),
     },
     Column {
         name: "go",
+        right: true,
         help: "GO verdicts on the seat's changes.",
         cell: |c, _| count(&c.verdicts_go),
     },
     Column {
         name: "return",
+        right: true,
         help: "RETURN verdicts on the seat's changes.",
         cell: |c, _| count(&c.verdicts_return),
     },
     Column {
         name: "sent",
+        right: true,
         help: "messages the seat sent.",
         cell: |c, _| count(&c.messages_sent),
     },
     Column {
         name: "recv",
+        right: true,
         help: "messages the seat received.",
         cell: |c, _| count(&c.messages_received),
     },
     Column {
         name: "goal%",
+        right: true,
         help: "the share of sent messages that name a goal.",
         cell: |c, _| {
             both(&c.messages_naming_goal, &c.messages_sent, |n, s| {
@@ -232,21 +273,25 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
     },
     Column {
         name: "asks-no-goal",
+        right: true,
         help: "decision messages sent (`[messages] decision_kinds`) that name no goal.",
         cell: |c, _| count(&c.decisions_without_goal),
     },
     Column {
         name: "created",
+        right: true,
         help: "tracker items the seat created.",
         cell: |c, _| count(&c.items_created),
     },
     Column {
         name: "wip",
+        right: true,
         help: "goals of a counted type the seat held claimed and open at the window's end.",
         cell: |c, _| count(&c.wip_at_end),
     },
     Column {
         name: "active-h",
+        right: true,
         help: "hours with session activity.",
         cell: |c, _| c.active_hours.cell(|h| format!("{h:.1}")),
     },
@@ -297,7 +342,13 @@ pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
         .chain([&card.unattributed, &card.total])
         .collect();
     let idle = card.seats.len() + 2 - shown.len();
-    out.push_str(&grid(SCORECARD, shown, card.to));
+    out.push_str(&stacked(
+        SCORECARD,
+        SCORECARD_GROUPS,
+        &shown,
+        card.to,
+        display.width,
+    ));
     if idle > 0 {
         let _ = writeln!(
             out,
@@ -306,8 +357,55 @@ pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
     }
     out.push('\n');
 
-    out.push_str(&summary(card));
+    for line in summary(card).lines() {
+        let indent = if line.starts_with("? ") { 2 } else { 9 };
+        let _ = writeln!(out, "{}", wrap(line, display.width, indent));
+    }
     out
+}
+
+/// Where the scorecard's column groups begin: runs and verdicts, messages,
+/// the tracker and activity.
+const SCORECARD_GROUPS: &[&str] = &["lands", "sent", "created"];
+
+/// `columns` over `rows` as one table if it fits `width`, else as tables
+/// stacked by group (each led by the first column), as many groups to a
+/// table as fit.
+fn stacked<R>(
+    columns: &[Column<R>],
+    groups: &[&str],
+    rows: &[&R],
+    now: Timestamp,
+    width: Option<usize>,
+) -> String {
+    let whole = grid(columns, rows.iter().copied(), now);
+    if fits(&whole, width) {
+        return whole;
+    }
+    let mut parts: Vec<Vec<Column<R>>> = Vec::new();
+    for c in columns.iter().skip(1) {
+        if groups.contains(&c.name) || parts.is_empty() {
+            parts.push(Vec::new());
+        }
+        if let Some(part) = parts.last_mut() {
+            part.push(*c);
+        }
+    }
+    let mut tables: Vec<String> = Vec::new();
+    let mut current: Vec<Column<R>> = vec![columns[0]];
+    for part in parts {
+        let mut wider = current.clone();
+        wider.extend(part.iter().copied());
+        if current.len() == 1 || fits(&grid(&wider, rows.iter().copied(), now), width) {
+            current = wider;
+        } else {
+            tables.push(grid(&current, rows.iter().copied(), now));
+            current = vec![columns[0]];
+            current.extend(part);
+        }
+    }
+    tables.push(grid(&current, rows.iter().copied(), now));
+    tables.join("\n")
 }
 
 /// The scorecard's summary lines: flow, tracker, hub, joins, repositories.
@@ -420,11 +518,7 @@ fn reasons(entries: &[(String, String)]) -> String {
             .split_once(' ')
             .map_or(("", key.as_str()), |(w, g)| (w, g));
         let (gauges, seats) = by_reason.entry(why.as_str()).or_default();
-        let gauge = if gauge.starts_with("goals.") && gauge.split('.').nth(2) == Some("used") {
-            "budget".to_owned()
-        } else {
-            gauge.split('.').next().unwrap_or(gauge).to_owned()
-        };
+        let gauge = gauge_column(gauge).to_owned();
         if !gauges.contains(&gauge) {
             gauges.push(gauge);
         }
@@ -444,6 +538,34 @@ fn reasons(entries: &[(String, String)]) -> String {
     out
 }
 
+/// The column a gauge's JSON path shows in, so a `?` line names what the
+/// reader sees: `last_verdict` is `verdict`, a goal's `used` is `budget`.
+fn gauge_column(path: &str) -> &str {
+    if path.starts_with("goals.") && path.split('.').nth(2) == Some("used") {
+        return "budget";
+    }
+    match path.split('.').next().unwrap_or(path) {
+        "goals" => "goal",
+        "landings" => "lands",
+        "last_land" => "last",
+        "runs_pass" => "pass",
+        "runs_since_land" => "since-land",
+        "last_verdict" => "verdict",
+        "overlaps" => "flags",
+        "messages_sent" => "sent",
+        "messages_received" => "recv",
+        "messages_naming_goal" => "goal%",
+        "decisions_without_goal" => "asks-no-goal",
+        "items_created" => "created",
+        "wip_at_end" => "wip",
+        "active_hours" => "active-h",
+        "verdicts_go" => "go",
+        "verdicts_return" => "return",
+        "runs_per_landing" => "runs/land",
+        other => other,
+    }
+}
+
 fn unit_short(unit: &str) -> &str {
     match unit {
         "agent-hours" => "ah",
@@ -458,6 +580,8 @@ fn unit_short(unit: &str) -> &str {
 /// line and `--help` all read it.
 pub struct Column<R> {
     pub name: &'static str,
+    /// Right-aligned (a count, a share, an age), whatever its cells hold.
+    pub right: bool,
     pub help: &'static str,
     pub cell: fn(&R, Timestamp) -> String,
 }
@@ -481,7 +605,75 @@ pub fn grid<'r, R: 'r>(
     for row in rows {
         table_rows.push(columns.iter().map(|c| (c.cell)(row, now)).collect());
     }
-    table(&table_rows)
+    let right: Vec<bool> = columns.iter().map(|c| c.right).collect();
+    aligned(&table_rows, &right)
+}
+
+/// Whether every line of `text` fits `width` (no width: always).
+fn fits(text: &str, width: Option<usize>) -> bool {
+    width.is_none_or(|w| text.lines().all(|l| l.chars().count() <= w))
+}
+
+/// `text` wrapped to `width` at its spaces, each line after the first
+/// indented by `indent`; unwrapped with no width.
+#[must_use]
+pub fn wrap(text: &str, width: Option<usize>, indent: usize) -> String {
+    let Some(width) = width else {
+        return text.to_owned();
+    };
+    let mut out = String::new();
+    let (mut len, mut fresh) = (0, true);
+    for word in text.split(' ') {
+        let n = word.chars().count();
+        if !fresh && len + 1 + n > width {
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            len = indent;
+        } else if !fresh {
+            out.push(' ');
+            len += 1;
+        }
+        out.push_str(word);
+        len += n;
+        fresh = false;
+    }
+    out
+}
+
+/// `items` after `lead`, as many as fit `width`, then `+N`; with no width,
+/// the first `cap`.
+fn fit_list(lead: &str, items: &[String], width: Option<usize>, cap: usize) -> String {
+    let mut out = lead.to_owned();
+    for (i, item) in items.iter().enumerate() {
+        let rest = items.len() - i - 1;
+        let more = if rest > 0 {
+            format!(", +{rest}")
+        } else {
+            String::new()
+        };
+        let sep = if i == 0 { "" } else { ", " };
+        let room = width.map_or(i < cap, |w| {
+            out.chars().count() + sep.len() + item.chars().count() + more.chars().count() <= w
+        });
+        if !room && i > 0 {
+            let _ = write!(out, ", +{}", items.len() - i);
+            return out;
+        }
+        out.push_str(sep);
+        match width {
+            // the first item alone is too long: keep its end, the part that
+            // tells one path from another
+            Some(w) if !room => {
+                let left = w.saturating_sub(out.chars().count() + more.chars().count() + 1);
+                let n = item.chars().count();
+                let tail: String = item.chars().skip(n.saturating_sub(left)).collect();
+                out.push('…');
+                out.push_str(&tail);
+            }
+            _ => out.push_str(item),
+        }
+    }
+    out
 }
 
 /// Each column after the first, defined in one line for `--help`.
@@ -558,26 +750,31 @@ fn verdict_cell(row: &Row, now: Timestamp) -> String {
 pub const BOARD: &[Column<Row>] = &[
     Column {
         name: "seat",
+        right: false,
         help: "the seat.",
         cell: |r, _| r.seat.clone(),
     },
     Column {
         name: "goal",
+        right: false,
         help: "the goal the seat's latest work cites, then +N for the others it holds.",
         cell: goal_cell,
     },
     Column {
         name: "budget",
+        right: false,
         help: "effort spent since the claim / the effort its `## Budget` section allows (agent-hours, hours, minutes, days or runs).",
         cell: budget_cell,
     },
     Column {
         name: "lands",
+        right: true,
         help: "the seat's landings on the trunk in the window.",
         cell: |r, _| count(&r.landings),
     },
     Column {
         name: "last",
+        right: true,
         help: "how long ago the seat last landed.",
         cell: |r, now| {
             r.last_land
@@ -586,31 +783,37 @@ pub const BOARD: &[Column<Row>] = &[
     },
     Column {
         name: "runs",
+        right: true,
         help: "the seat's runner runs in the window.",
         cell: |r, _| count(&r.runs),
     },
     Column {
         name: "pass",
+        right: true,
         help: "the share of those runs that passed.",
         cell: |r, _| both(&r.runs_pass, &r.runs, |p, n| percent(*p, *n)),
     },
     Column {
         name: "since-land",
+        right: true,
         help: "runs since the seat's last landing (with none, since landings are first read).",
         cell: |r, _| count(&r.runs_since_land),
     },
     Column {
         name: "verdict",
+        right: false,
         help: "the last review verdict on the seat's changes, and its age.",
         cell: verdict_cell,
     },
     Column {
         name: "findings",
+        right: true,
         help: "comments on the lead goal since it was claimed.",
         cell: |r, _| count(&r.findings),
     },
     Column {
         name: "state",
+        right: false,
         help: "the seat's live session now and for how long: busy (a turn runs) or idle (waiting for a prompt); — when none runs.",
         cell: |r, now| {
             r.state.as_ref().map_or_else(String::new, |g| {
@@ -625,6 +828,7 @@ pub const BOARD: &[Column<Row>] = &[
     },
     Column {
         name: "flags",
+        right: false,
         help: "what needs acting on, below.",
         cell: |r, _| r.flags.join(" · "),
     },
@@ -685,38 +889,233 @@ pub fn board(board: &Board) -> String {
     board_in(board, &Display::utc())
 }
 
-/// The board as text, for `display`.
+/// Columns the board gives up, in this order, when it cannot fit its
+/// width any other way.
+const BOARD_DROPS: &[&str] = &["findings", "since-land", "pass", "last", "state", "budget"];
+
+/// A seat with nothing to show: no goal (where the board shows goals),
+/// nothing landed or run in the window, no flag, no turn running. Unknown
+/// is never quiet.
+fn quiet(row: &Row, goal_schema: bool) -> bool {
+    let zero = |g: &Gauge<usize>| g.get().is_some_and(|n| *n == 0);
+    let busy = row
+        .state
+        .as_ref()
+        .and_then(Gauge::get)
+        .is_some_and(|s| s.as_ref().is_some_and(|s| s.status == "busy"));
+    (!goal_schema || row.goals.get().is_some_and(Vec::is_empty))
+        && zero(&row.landings)
+        && (zero(&row.runs) || !row.runs.is_known())
+        && row.flags.is_empty()
+        && !busy
+}
+
+/// The board as text, for `display`: fitted to its width, quiet seats
+/// folded into one line, overlapping files and every `?` explained beneath.
 #[must_use]
 pub fn board_in(board: &Board, display: &Display) -> String {
+    let width = display.width;
     let mut out = format!(
         "board as of {} · counts over the last {}h\n\n",
         display.time(board.asof),
         board.window_hours
     );
-    out.push_str(&grid(
-        &board_columns(board.goal_schema, &board.seats),
-        &board.seats,
-        board.asof,
-    ));
-    out.push_str(&unseated(board));
+    let (shown, folded): (Vec<&Row>, Vec<&Row>) = board
+        .seats
+        .iter()
+        .partition(|r| display.all || !quiet(r, board.goal_schema));
+    let shown_seats: Vec<&str> = shown.iter().map(|r| r.seat.as_str()).collect();
     let mut entries = row_unknowns(&board.seats, |r| r.seat.as_str());
     // a column the board does not show has no `?` to explain, nor does a
-    // flag no source could raise
+    // flag no source could raise, nor a seat folded away
     let hidden = |path: &str| {
         (!board.goal_schema && path.starts_with("goals"))
             || (!board.overlaps_read && path.starts_with("overlaps"))
     };
-    entries.retain(|(key, _)| key.split_once(' ').is_none_or(|(_, path)| !hidden(path)));
+    entries.retain(|(key, _)| {
+        key.split_once(' ')
+            .is_none_or(|(seat, path)| !hidden(path) && shown_seats.contains(&seat))
+    });
+    let mut columns = board_columns(board.goal_schema, &board.seats);
+    let unsourced = unsourced(&mut columns, &shown, &mut entries);
+    let (table, flags_beneath, dropped) = fitted(columns, &shown, board.asof, width);
+    out.push_str(&table);
+    if flags_beneath {
+        out.push_str(&flags_list(&shown, width));
+    }
+    if !dropped.is_empty() {
+        let note = format!(
+            "(hidden to fit {} columns: {}; a wider terminal or a pipe shows them)",
+            width.unwrap_or_default(),
+            dropped.join(", ")
+        );
+        let _ = writeln!(out, "\n{}", wrap(&note, width, 1));
+    }
+    if !folded.is_empty() {
+        let names: Vec<String> = folded.iter().map(|r| r.seat.clone()).collect();
+        let n = names.len();
+        let lead = format!(
+            "{n} quiet {} (--all shows {}): ",
+            if n == 1 { "seat" } else { "seats" },
+            if n == 1 { "it" } else { "them" }
+        );
+        let _ = writeln!(out, "\n{}", fit_list(&lead, &names, width, 6));
+    }
+    out.push_str(&overlapping(&shown, width));
+    if !unsourced.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n{}",
+            wrap(
+                &format!("not shown, no source reads them: {}", unsourced.join(", ")),
+                width,
+                2
+            )
+        );
+    }
     if !entries.is_empty() {
         out.push('\n');
-        out.push_str(&reasons(&entries));
+        for line in reasons(&entries).lines() {
+            let _ = writeln!(out, "{}", wrap(line, width, 2));
+        }
+    }
+    out.push_str(&unseated(board, width));
+    out
+}
+
+/// Take out of `columns` each that no source feeds, `?` on every shown row
+/// for want of a source: it is named once, not shown, and its `?` lines go.
+fn unsourced(
+    columns: &mut Vec<Column<Row>>,
+    shown: &[&Row],
+    entries: &mut Vec<(String, String)>,
+) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    columns.retain(|c| {
+        let unread = |seat: &str| {
+            entries.iter().any(|(key, why)| {
+                key.split_once(' ').is_some_and(|(s, path)| {
+                    s == seat && gauge_column(path) == c.name && why.starts_with("no source reads")
+                })
+            })
+        };
+        let none = !shown.is_empty() && shown.iter().all(|r| unread(&r.seat));
+        if none {
+            names.push(c.name);
+        }
+        !none
+    });
+    entries.retain(|(key, _)| {
+        key.split_once(' ')
+            .is_none_or(|(_, path)| !names.contains(&gauge_column(path)))
+    });
+    names
+}
+
+/// The table, fitted to `width`: too wide, the flags go beneath it, then
+/// the least needed columns go. Returns whether the flags went, and which
+/// columns.
+fn fitted(
+    mut columns: Vec<Column<Row>>,
+    shown: &[&Row],
+    asof: Timestamp,
+    width: Option<usize>,
+) -> (String, bool, Vec<&'static str>) {
+    let mut table = grid(&columns, shown.iter().copied(), asof);
+    let mut dropped = Vec::new();
+    if fits(&table, width) {
+        return (table, false, dropped);
+    }
+    columns.retain(|c| c.name != "flags");
+    table = grid(&columns, shown.iter().copied(), asof);
+    for name in BOARD_DROPS {
+        if fits(&table, width) {
+            break;
+        }
+        if columns.iter().any(|c| c.name == *name) {
+            columns.retain(|c| c.name != *name);
+            dropped.push(*name);
+            table = grid(&columns, shown.iter().copied(), asof);
+        }
+    }
+    (table, true, dropped)
+}
+
+/// Each flagged seat's flags, one seat to a line, wrapped under the table.
+fn flags_list(shown: &[&Row], width: Option<usize>) -> String {
+    let flagged: Vec<&&Row> = shown.iter().filter(|r| !r.flags.is_empty()).collect();
+    if flagged.is_empty() {
+        return String::new();
+    }
+    let pad = flagged
+        .iter()
+        .map(|r| r.seat.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("\nflags\n");
+    for row in flagged {
+        let line = format!("  {:<pad$}  {}", row.seat, row.flags.join(" · "));
+        let _ = writeln!(out, "{}", wrap(&line, width, pad + 4));
+    }
+    out
+}
+
+/// The unlanded files seats' workspaces share: each set of files once,
+/// with every seat that holds it, as many paths as fit.
+fn overlapping(rows: &[&Row], width: Option<usize>) -> String {
+    let mut sets: BTreeMap<&[String], Vec<&str>> = BTreeMap::new();
+    for row in rows {
+        for o in row.overlaps.get().into_iter().flatten() {
+            let holders = sets.entry(o.files.as_slice()).or_default();
+            for seat in [row.seat.as_str(), o.seat.as_str()] {
+                if !holders.contains(&seat) {
+                    holders.push(seat);
+                }
+            }
+        }
+    }
+    if sets.is_empty() {
+        return String::new();
+    }
+    let mut lines: Vec<(String, &[String])> = sets
+        .into_iter()
+        .map(|(files, mut seats)| {
+            seats.sort_unstable();
+            (seats.join(", "), files)
+        })
+        .collect();
+    lines.sort();
+    let pad = lines
+        .iter()
+        .map(|(who, _)| who.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("\nunlanded files shared by workspaces\n");
+    for (who, files) in lines {
+        let who = if width.is_some_and(|w| pad + 24 > w) {
+            // too many seats to share a line with paths: they get their own
+            let _ = writeln!(out, "  {}", wrap(&who, width.map(|w| w - 2), 2));
+            String::new()
+        } else {
+            format!("{who:<pad$}  ")
+        };
+        let count = if files.len() > 3 {
+            format!("{} files: ", files.len())
+        } else {
+            String::new()
+        };
+        let _ = writeln!(
+            out,
+            "{}",
+            fit_list(&format!("  {who}{count}"), files, width, 3)
+        );
     }
     out
 }
 
 /// Goals no row shows, claimed by an identity that is no seat: one line per
 /// identity, with how many and the fix (`--json` lists every goal).
-fn unseated(board: &Board) -> String {
+fn unseated(board: &Board, width: Option<usize>) -> String {
     let mut by_owner: BTreeMap<&str, Vec<&crate::fold::board::Unseated>> = BTreeMap::new();
     for u in board.unseated.get().into_iter().flatten() {
         by_owner.entry(u.owner.as_str()).or_default().push(u);
@@ -740,7 +1139,7 @@ fn unseated(board: &Board) -> String {
             ),
             [] => continue,
         };
-        out.push_str(&line);
+        out.push_str(&wrap(&line, width, 2));
         out.push('\n');
     }
     out
@@ -783,6 +1182,7 @@ mod tests {
         assert_eq!(Display::utc().time(t), "2026-10-27 06:42 UTC");
         let pdt = Display {
             zone: TimeZone::get("America/Los_Angeles").unwrap_or_else(|e| panic!("{e}")),
+            ..Display::utc()
         };
         assert_eq!(pdt.time(t), "2026-10-26 23:42 PDT");
     }

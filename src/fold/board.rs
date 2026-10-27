@@ -127,8 +127,8 @@ pub const FLAGS: &[(&str, &str)] = &[
         "runs piling up with nothing landed (not for hubs).",
     ),
     (
-        "overlaps S on N files",
-        "files the seat's workspace changed and has not landed that seat S's has too, as of each workspace's last jj snapshot (`?` where a workspace could not be read).",
+        "overlaps S (N files)",
+        "files the seat's workspace changed and has not landed that seat S's has too, as of each workspace's last jj snapshot; the files are listed under the table (`?` where a workspace could not be read).",
     ),
 ];
 
@@ -189,8 +189,20 @@ pub struct Overlap {
     pub snapshot: Option<Timestamp>,
 }
 
-/// The flag, and the hook's change, for an overlap: the seat, the count
-/// and the first paths.
+/// The board's flag for a seat's overlaps: whom, and how many files in all.
+/// The paths are listed under the table, and every one in `--json`.
+#[must_use]
+pub fn overlaps_flag(overlaps: &[Overlap]) -> Option<String> {
+    let seats: Vec<&str> = overlaps.iter().map(|o| o.seat.as_str()).collect();
+    let files: std::collections::BTreeSet<&String> =
+        overlaps.iter().flat_map(|o| &o.files).collect();
+    let n = files.len();
+    let unit = if n == 1 { "file" } else { "files" };
+    (!seats.is_empty()).then(|| format!("overlaps {} ({n} {unit})", seats.join(", ")))
+}
+
+/// The hook's change for an overlap: the seat, the count and the first
+/// paths.
 #[must_use]
 pub fn overlap(o: &Overlap) -> String {
     let n = o.files.len();
@@ -734,7 +746,7 @@ fn flags(
     // an overlap speaks where every workspace was read; `?` where one was
     // looked at and could not be read
     match row.overlaps.get() {
-        Some(overlaps) => flags.extend(overlaps.iter().map(overlap)),
+        Some(overlaps) => flags.extend(overlaps_flag(overlaps)),
         None if looked_at(p, "state:unlanded", asof) => flags.push("overlaps ?".to_owned()),
         None => {}
     }
@@ -758,6 +770,7 @@ fn flags(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::path::Path;
 
     use super::*;
@@ -1229,6 +1242,82 @@ mod tests {
         board(&ledger, &config(), at(asof))
     }
 
+    /// A crowded board: six seats with long names, four of them
+    /// holding the same long paths unlanded, one with nothing at all.
+    fn crowded() -> Board {
+        let seats = [
+            "proj-0a", "proj-0b", "proj-1a", "proj-1b", "proj-2a", "proj-2b",
+        ];
+        let toml = seats.iter().fold(String::new(), |mut t, s| {
+            let _ = writeln!(t, "[seats.{s}]");
+            t
+        });
+        let config = Config::parse(&toml, Path::new("/")).unwrap_or_else(|e| panic!("{e}"));
+        let paths: Vec<String> = (0..17)
+            .map(|i| format!("lib/project/integrations/sources/provider_{i}/module.ex"))
+            .collect();
+        let mut events = workspaces_read(&["land", "run"]);
+        for seat in &seats[..4] {
+            for p in &paths {
+                events.push(unlanded("2026-10-13T09:00:00Z", seat, p));
+            }
+        }
+        for seat in &seats[..5] {
+            events.push(event("2026-10-13T08:00:00Z", Kind::Land, seat, None));
+        }
+        let ledger = adapters::resolve(&config, events);
+        board(&ledger, &config, at("2026-10-13T12:00:00Z"))
+    }
+
+    #[test]
+    fn a_crowded_board_fits_its_terminal_and_names_each_shared_file_once() {
+        let b = crowded();
+        for width in [80, 120] {
+            let display = crate::render::Display {
+                width: Some(width),
+                ..crate::render::Display::utc()
+            };
+            let text = crate::render::board_in(&b, &display);
+            for line in text.lines() {
+                assert!(line.chars().count() <= width, "{width}: {line:?}\n{text}");
+            }
+            // a flag names whom and how many, never a path
+            assert!(
+                text.contains("overlaps proj-0b, proj-1a, proj-1b (17 files)"),
+                "{text}"
+            );
+            // the files four seats share are listed once, with all four
+            assert_eq!(
+                text.matches("proj-0a, proj-0b, proj-1a, proj-1b  17 files: ")
+                    .count(),
+                1,
+                "{text}"
+            );
+            // the seat with nothing is folded, and named
+            assert!(
+                text.contains("1 quiet seat (--all shows it): proj-2b"),
+                "{text}"
+            );
+            assert!(!text.lines().any(|l| l.starts_with("proj-2b ")), "{text}");
+        }
+        // piped: nothing cut, every column kept
+        let piped = crate::render::board(&b);
+        assert!(piped.lines().next().is_some());
+        assert!(
+            piped.contains("overlaps proj-0b, proj-1a, proj-1b (17 files)"),
+            "{piped}"
+        );
+        let all = crate::render::Display {
+            all: true,
+            ..crate::render::Display::utc()
+        };
+        assert!(
+            crate::render::board_in(&b, &all)
+                .lines()
+                .any(|l| l.starts_with("proj-2b "))
+        );
+    }
+
     #[test]
     fn two_seats_changing_one_file_are_flagged() {
         let b = overlap_board(
@@ -1240,18 +1329,12 @@ mod tests {
             ],
             "2026-10-13T12:00:00Z",
         );
-        assert_eq!(
-            b.seats[0].flags,
-            vec!["overlaps x-1b on 1 file (src/render.rs)"]
-        );
-        assert_eq!(
-            b.seats[1].flags,
-            vec!["overlaps x-1a on 1 file (src/render.rs)"]
-        );
+        assert_eq!(b.seats[0].flags, vec!["overlaps x-1b (1 file)"]);
+        assert_eq!(b.seats[1].flags, vec!["overlaps x-1a (1 file)"]);
     }
 
     #[test]
-    fn the_flag_names_the_first_paths_and_json_lists_every_one() {
+    fn the_flag_counts_the_files_and_json_lists_every_one() {
         let files = ["a.rs", "b.rs", "c.rs", "d.rs"];
         let mut events: Vec<Event> = files
             .iter()
@@ -1266,10 +1349,7 @@ mod tests {
             e.set_attr(crate::event::attr::SNAPSHOT, "2026-10-13T11:58:00Z");
         }
         let b = overlap_board(events, "2026-10-13T12:00:00Z");
-        assert_eq!(
-            b.seats[0].flags,
-            vec!["overlaps x-1b on 4 files (a.rs, b.rs, +2)"]
-        );
+        assert_eq!(b.seats[0].flags, vec!["overlaps x-1b (4 files)"]);
         let json = serde_json::to_value(&b.seats[0].overlaps).unwrap_or_default();
         assert_eq!(
             json,

@@ -4,6 +4,17 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- The board fits the terminal (`.design/2026-10-27-first-class-interface.md`
+  §1). On a terminal (or with `COLUMNS` set) no line of `board`, `asof` or
+  `scorecard` passes its width: flags that do not fit go beneath the
+  table, then the least needed columns, named; the scorecard stacks its
+  column groups. An overlap flag names seats and a count, `overlaps 0b, 1a
+  (17 files)`; the files are listed once beneath, by the seats sharing
+  them. A seat with nothing to show folds into one `quiet` line (`--all`
+  shows it; `--seat` always does), a column no source feeds is named once
+  instead of a column of `?`, `?` lines name the column they explain, and
+  columns align by what they hold, not by their cells.
+
 - Time reads and prints in the reader's zone
   (`.design/2026-10-27-first-class-interface.md` §4). Text headers name
   the zone (`board as of 2026-10-26 23:42 PDT`); `TZ=UTC` gives the UTC

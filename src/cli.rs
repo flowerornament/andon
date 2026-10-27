@@ -54,6 +54,9 @@ pub enum Command {
         /// Only this seat's row.
         #[arg(long)]
         seat: Option<String>,
+        /// Every seat, the quiet ones too.
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
     },
@@ -63,8 +66,12 @@ pub enum Command {
         /// offset), yesterday, or -6h.
         #[arg(allow_hyphen_values = true)]
         when: String,
+        /// Only this seat's row.
         #[arg(long)]
         seat: Option<String>,
+        /// Every seat, the quiet ones too.
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
     },
@@ -207,21 +214,26 @@ pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
             ledger.write(out)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Board { seat, json } => {
+        Command::Board { seat, all, json } => {
             // the board's instant is read before the sources, so every source
             // read after it covers it; the clock is read nowhere in the fold
             let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
-            show_board(out, &ledger, &config, now, seat.as_deref(), *json)
+            show_board(out, &ledger, &config, now, seat.as_deref(), *all, *json)
         }
-        Command::Asof { when, seat, json } => {
+        Command::Asof {
+            when,
+            seat,
+            all,
+            json,
+        } => {
             let now = clock();
             let config = load_config(cli, now)?;
             let ledger = load_ledger(cli, &config)?;
             // a date is its end; a moment not yet come is now
             let asof = endpoint_in(when, now, &TimeZone::system(), true)?.min(now);
-            show_board(out, &ledger, &config, asof, seat.as_deref(), *json)
+            show_board(out, &ledger, &config, asof, seat.as_deref(), *all, *json)
         }
         Command::Scorecard { window, json } => {
             // `now` closes an open window; read before the sources, which then
@@ -339,6 +351,7 @@ fn show_board(
     config: &Config,
     asof: Timestamp,
     seat: Option<&str>,
+    all: bool,
     json: bool,
 ) -> Result<ExitCode> {
     let mut board = fold::board::board(ledger, config, asof);
@@ -354,7 +367,12 @@ fn show_board(
         serde_json::to_writer_pretty(&mut *out, &board)?;
         out.write_all(b"\n")?;
     } else {
-        out.write_all(render::board_in(&board, &render::Display::local()).as_bytes())?;
+        let display = render::Display {
+            // a seat asked for by name is shown, quiet or not
+            all: all || seat.is_some(),
+            ..render::Display::local()
+        };
+        out.write_all(render::board_in(&board, &display).as_bytes())?;
     }
     Ok(ExitCode::SUCCESS)
 }

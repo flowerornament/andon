@@ -117,8 +117,8 @@ fn two_workspaces_changing_one_file_overlap_until_one_lands() {
     assert_eq!(
         s.flags(),
         vec![
-            vec!["overlaps demo-1b on 1 file (a.txt)".to_owned()],
-            vec!["overlaps demo-1a on 1 file (a.txt)".to_owned()],
+            vec!["overlaps demo-1b (1 file)".to_owned()],
+            vec!["overlaps demo-1a (1 file)".to_owned()],
         ]
     );
 

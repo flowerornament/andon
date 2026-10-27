@@ -27,11 +27,13 @@ struct Seat {
 const COLUMNS: &[Column<Seat>] = &[
     Column {
         name: "seat",
+        right: true,
         help: "the seat.",
         cell: |s, _| s.seat.clone(),
     },
     Column {
         name: "spawns",
+        right: true,
         help: "subagents the seat started in the window.",
         cell: |s, _| s.spawns.cell(ToString::to_string),
     },
@@ -68,14 +70,14 @@ fn a_gauge_is_a_spec_and_a_column() {
         coverage(ALL_HISTORY, None, &["spawn"], "transcripts", None),
     ]);
     let rows = [seat(&read)];
-    assert_eq!(grid(COLUMNS, &rows, now), "seat  spawns\nx-1a  1\n");
+    assert_eq!(grid(COLUMNS, &rows, now), "seat  spawns\nx-1a       1\n");
     assert_eq!(row_unknowns(&rows, |s| s.seat.as_str()), Vec::new());
 
     // not covered: `?`, never 0, and the reason, with no code but the two
     // declarations above
     let unread = Ledger::new(vec![spawn]);
     let rows = [seat(&unread)];
-    assert_eq!(grid(COLUMNS, &rows, now), "seat  spawns\nx-1a  ?\n");
+    assert_eq!(grid(COLUMNS, &rows, now), "seat  spawns\nx-1a       ?\n");
     assert_eq!(
         row_unknowns(&rows, |s| s.seat.as_str()),
         vec![("x-1a spawns".to_owned(), "no source reads spawn".to_owned())]
