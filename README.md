@@ -56,16 +56,16 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
 | Command | What it does |
 |---|---|
 | `andon` / `andon board [--seat S] [--all] [--json]` | One row per seat now. Quiet seats (no goal, nothing in the window) fold into one line. |
+| `andon goals [--seat S] [--open] [--all] [--json]` | The goals someone holds: who holds each (a name that is no seat is marked `*`), budget spent of allowed, and how long since the claim, then a count of the open goals no one holds. `--open` lists those too, `--all` the closed ones as well. |
+| `andon seats [--json]` | The roster: each seat's aliases and prefixes, where it works, its live session and what joined to it in the window; then every name the sources recorded that joins no seat, with the fix. |
 | `andon asof WHEN` | The board as it stood at an instant, replayed from the ledger. A date means its end. |
 | `andon scorecard [WINDOW]` | Per seat over a window (default today): landings, runs, verdicts, messages, tracker items, active hours; then flow medians, the tracker's branching, the hub and how well the joins held. |
 | `andon check commit REV` | The commit cites a goal its seat has claimed, within WIP. |
 | `andon check goal ID` | The goal has its sections, a done-when that can fail, a finite budget, and room in its pool. |
 | `andon check message KIND` | A decision names the goal it serves. |
 | `andon hook` | The seat's row for a harness hook. Never fails a session. |
-| `andon goals [--seat S] [--open] [--all] [--json]` | The goals someone holds: who holds each (a name that is no seat is marked `*`), budget spent of allowed, and how long since the claim, then a count of the open goals no one holds. `--open` lists those too, `--all` the closed ones as well. |
-| `andon seats [--json]` | The roster: each seat's aliases and prefixes, where it works, its live session and what joined to it in the window; then every name the sources recorded that joins no seat, with the fix. |
-| `andon doctor` | What each configured source read: its events, the span it covers, its gaps and its time, or its whole error; then the hook's wiring. Exits 1, naming the fix, when a source cannot be read. |
 | `andon ledger` | Every event as JSONL, to keep; `--ledger FILE` reads it back instead of the sources. |
+| `andon doctor` | What each configured source read: its events, the span it covers, its gaps and its time, or its whole error; then the hook's wiring. Exits 1, naming the fix, when a source cannot be read. |
 | `andon init` | An `andon.toml` for this repository, from what it finds: its name, jj or git and the trunk, bd's issue prefix, jj workspaces as seats, Claude Code's session files and hail. |
 
 **Times.** Text prints times in the local zone, with the zone named; `TZ=UTC andon …` prints UTC, and `--json` is always UTC. A time is a date (`2026-10-24`), a local time (`2026-10-24T09:30`), an exact one (`…Z` or an offset), `now`, `today`, `yesterday`, `-6h` or `-2d`. A window is a day, `FROM..TO`, `FROM..`, or the last `6h` or `2d`.

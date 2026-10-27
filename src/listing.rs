@@ -61,23 +61,49 @@ fn cut(text: &str, max: usize) -> String {
     format!("{kept}…")
 }
 
-/// A table whose last column is cut so each line fits `width`.
+/// A table whose last column is cut so each line fits `width`. Short of
+/// room, a column whose every cell says the same is dropped first (the
+/// held goals are all `claimed`).
 fn fitted(mut rows: Vec<Vec<String>>, right: &[bool], width: Option<usize>) -> String {
     let Some(width) = width else {
         return render::aligned(&rows, right);
     };
+    let widest = |rows: &[Vec<String>], right: &[bool]| {
+        render::aligned(rows, right)
+            .lines()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
+    };
+    let mut right = right.to_vec();
     let last = rows.first().map_or(0, Vec::len).saturating_sub(1);
-    // the width every column but the last takes, with its separators
-    let lead = (0..last)
-        .map(|i| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0) + 2)
-        .sum::<usize>();
-    let room = width.saturating_sub(lead).max(12);
-    for row in rows.iter_mut().skip(1) {
-        if let Some(cell) = row.get_mut(last) {
-            *cell = cut(cell, room);
+    if widest(&rows, &right) > width {
+        let same: Vec<usize> = (0..last)
+            .filter(|&i| rows.len() > 2 && rows[2..].iter().all(|r| r[i] == rows[1][i]))
+            .collect();
+        for &i in same.iter().rev() {
+            for row in &mut rows {
+                row.remove(i);
+            }
+            right.remove(i);
         }
     }
-    render::aligned(&rows, right)
+    let last = rows.first().map_or(0, Vec::len).saturating_sub(1);
+    // cut the last column by what the laid-out table overflows
+    let over = widest(&rows, &right).saturating_sub(width);
+    if over > 0 {
+        let longest = rows
+            .iter()
+            .skip(1)
+            .map(|r| r[last].chars().count())
+            .max()
+            .unwrap_or(0);
+        let room = longest.saturating_sub(over).max(12);
+        for row in rows.iter_mut().skip(1) {
+            row[last] = cut(&row[last], room);
+        }
+    }
+    render::aligned(&rows, &right)
 }
 
 /// The line beneath a list that leaves out the goals no one holds.

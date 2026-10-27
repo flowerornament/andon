@@ -101,7 +101,7 @@ fn display(cli: &Cli) -> render::Display {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// One row per seat now: goal, budget spent, landings, runs, verdict, flags.
+    /// One row per seat now: goal, budget, lands, runs, verdict, flags.
     #[command(
         long_about = render::board_help(),
         after_help = "Examples:\n  andon board\n  andon board --seat proj-1a\n  andon board --all --json | jq '.seats[].flags'"
@@ -114,6 +114,38 @@ pub enum Command {
         #[arg(long)]
         all: bool,
         /// Print the board as JSON (board schema 4, every seat), not text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Who holds which goal: budget spent and time since the claim.
+    ///
+    /// The goals someone holds, who holds each, budget spent of allowed,
+    /// and how long since the claim; then how many open goals no one holds.
+    #[command(
+        after_help = "Examples:\n  andon goals\n  andon goals --open\n  andon goals --seat proj-1a\n  andon goals --all --json | jq '.goals[].id'"
+    )]
+    Goals {
+        /// Only the goals this seat (or identity) holds.
+        #[arg(long)]
+        seat: Option<String>,
+        /// The open goals no one holds too.
+        #[arg(long)]
+        open: bool,
+        /// Open and closed goals: every goal.
+        #[arg(long)]
+        all: bool,
+        /// The list as JSON (schema 2).
+        #[arg(long)]
+        json: bool,
+    },
+    /// The roster: each seat's names, workspace, session and joins.
+    ///
+    /// Each configured seat with the names that join to it, where it works,
+    /// its live session and what joined to it in the window; then the names
+    /// the sources recorded that join no seat, with the fix.
+    #[command(after_help = "Examples:\n  andon seats\n  andon seats --json")]
+    Seats {
+        /// The roster as JSON (schema 1).
         #[arg(long)]
         json: bool,
     },
@@ -150,7 +182,7 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// A refusal for a choke point: exit 1 and one line naming the fix, or exit 0.
+    /// A refusal at a choke point: exit 1 naming the fix, or exit 0.
     #[command(
         after_help = "Examples:\n  andon check commit @                in the land verb, before it moves trunk\n  andon check goal proj-abc           when a goal is filed\n  andon check message ask --goal proj-abc"
     )]
@@ -158,7 +190,7 @@ pub enum Command {
         #[command(subcommand)]
         what: CheckCommand,
     },
-    /// The seat's row and what changed since its last turn, for a harness hook.
+    /// The seat's row and what changed since its last turn, for a hook.
     ///
     /// Reads the hook's JSON payload on stdin and never fails a session: a
     /// problem is one line in the agent's context, and exit 0.
@@ -181,40 +213,19 @@ pub enum Command {
         #[arg(long, allow_hyphen_values = true)]
         since: Option<String>,
     },
-    /// The goals someone holds, who holds each, budget spent of allowed,
-    /// and how long since the claim; then how many open goals no one holds.
-    #[command(
-        after_help = "Examples:\n  andon goals\n  andon goals --open\n  andon goals --seat proj-1a\n  andon goals --all --json | jq '.goals[].id'"
-    )]
-    Goals {
-        /// Only the goals this seat (or identity) holds.
-        #[arg(long)]
-        seat: Option<String>,
-        /// The open goals no one holds too.
-        #[arg(long)]
-        open: bool,
-        /// Open and closed goals: every goal.
-        #[arg(long)]
-        all: bool,
-        /// The list as JSON (schema 2).
-        #[arg(long)]
-        json: bool,
-    },
-    /// The seats: the names that join to each, where it works, its live
-    /// session and what joined to it lately; then names that join no seat.
-    #[command(after_help = "Examples:\n  andon seats\n  andon seats --json")]
-    Seats {
-        /// The roster as JSON (schema 1).
-        #[arg(long)]
-        json: bool,
-    },
-    /// What each configured source read, in full: events, the span it
-    /// covers, its gaps and its time, or its whole error; then the hook's
-    /// wiring. Exits 1, naming the fix, when a source cannot be read.
+    /// What each source read, and the hook's wiring; exit 1 names the fix.
+    ///
+    /// For each configured source: its events, the span it covers, its gaps
+    /// and its time, or its whole error. Then the hook's wiring, as `hook
+    /// --check` reports it. Exits 1, naming the fix, when a source cannot be
+    /// read.
     #[command(after_help = "Example:\n  andon doctor")]
     Doctor,
-    /// Print an andon.toml for this repository, from what it finds here
-    /// (redirect it into place).
+    /// Print an andon.toml for this repository, from what it finds here.
+    ///
+    /// It detects the name, jj or git and the trunk, bd's prefix, the jj
+    /// workspaces as seats, and the session, presence and hail sources.
+    /// It writes nothing: redirect it into place.
     #[command(after_help = "Example:\n  andon init > andon.toml")]
     Init,
 }
