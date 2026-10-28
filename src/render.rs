@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
 use crate::fold::board::{Board, Row};
+use crate::fold::coverage::NOT_CONFIGURED;
 use crate::fold::gauge::{Gauge, unknowns};
 use crate::fold::scorecard::{Scorecard, SeatCard};
 
@@ -180,7 +181,7 @@ impl Style {
 /// How loud a flag is.
 fn flag_style(flag: &str) -> Style {
     if flag.starts_with("over budget")
-        || flag.starts_with("last land refused")
+        || flag.starts_with("last land failed")
         || flag.starts_with("idle ")
     {
         Style::Alarm
@@ -337,7 +338,7 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
     Column {
         name: "runs",
         right: true,
-        help: "runner runs.",
+        help: "CI and gate runs.",
         cell: |c, _| c.runs.cell(|r| r.total.to_string()),
     },
     Column {
@@ -349,13 +350,13 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
     Column {
         name: "unexplained",
         right: true,
-        help: "failed runs that kept neither a reason nor an output tail.",
+        help: "failed runs with no reason and no log.",
         cell: |c, _| c.runs.cell(|r| r.fail_without_reason.to_string()),
     },
     Column {
-        name: "runs/land",
+        name: "tries",
         right: true,
-        help: "runs per landing (— with no landing).",
+        help: "runs per landing: how many tries a landing took (— with no landing).",
         cell: |c, _| c.runs_per_landing.cell(|v| opt(*v)),
     },
     Column {
@@ -385,7 +386,7 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
     Column {
         name: "on-goal",
         right: true,
-        help: "the share of sent messages that name a goal.",
+        help: "the share of sent messages that reference a goal.",
         cell: |c, _| {
             both(&c.messages_naming_goal, &c.messages_sent, |n, s| {
                 percent(*n, *s)
@@ -395,19 +396,19 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
     Column {
         name: "asks-off-goal",
         right: true,
-        help: "decision messages sent (`[messages] decision_kinds`) that name no goal.",
+        help: "decision messages sent (`[messages] decision_kinds`) that don't reference a goal.",
         cell: |c, _| count(&c.decisions_without_goal),
     },
     Column {
         name: "created",
         right: true,
-        help: "tracker items the seat created.",
+        help: "issues the seat created.",
         cell: |c, _| count(&c.items_created),
     },
     Column {
         name: "wip",
         right: true,
-        help: "goals of a counted type the seat held claimed and open at the window's end.",
+        help: "open goals of a counted type the seat had claimed at the window's end.",
         cell: |c, _| count(&c.wip_at_end),
     },
     Column {
@@ -422,11 +423,11 @@ pub const SCORECARD: &[Column<SeatCard>] = &[
 #[must_use]
 pub fn scorecard_help() -> String {
     let mut out = String::from(
-        "The four gauges per seat over a window: DAY, FROM..TO or FROM..\n\nColumns, per seat, over the window:\n",
+        "Flow, rework, messages and WIP per seat over a window: DAY, FROM..TO or FROM..\n\nColumns, per seat, over the window:\n",
     );
     out.push_str(&help(SCORECARD));
     out.push_str(
-        "\nBelow the table: flow medians (change start to landing, to first verdict, land gate),\nthe tracker (created, closed, created/closed, open, unowned), the hub, and how well the joins held.\n`?` marks a value the sources do not cover; the reason is listed beneath.",
+        "\nBelow the tables: cycle time (median commit to landing, to first verdict, and the land gate),\nissues (created, closed, their ratio, open, unowned), the busiest inbox, and how many\nevents matched a seat. `?` marks an unknown value; the reason is listed below.",
     );
     out
 }
@@ -485,10 +486,7 @@ pub fn scorecard_in(card: &Scorecard, display: &Display) -> String {
         let _ = writeln!(out, "{painted}");
     }
     if idle > 0 {
-        let _ = writeln!(
-            out,
-            "({idle} more accounts appear with nothing counted; --json lists them)"
-        );
+        let _ = writeln!(out, "({idle} more with no activity; --json lists them)");
     }
     out.push('\n');
 
@@ -558,7 +556,7 @@ fn summary(card: &Scorecard) -> String {
     let f = &card.flow;
     let _ = writeln!(
         out,
-        "flow     change start → land {} (n {}) · → first verdict {} (n {}) · land gate {} (n {})",
+        "cycle    commit → land {} (n {}) · → first verdict {} (n {}) · land gate {} (n {})",
         f.lead_median_min.cell(|v| minutes(*v)),
         count(&f.lead_n),
         f.review_median_min.cell(|v| minutes(*v)),
@@ -569,7 +567,7 @@ fn summary(card: &Scorecard) -> String {
     let t = &card.tracker;
     let _ = writeln!(
         out,
-        "tracker  created {} · closed {} · created/closed {} · open at end {} · unowned {}",
+        "issues   created {} · closed {} · created/closed {} · open at end {} · unowned {}",
         count(&t.created),
         count(&t.closed),
         t.branching.cell(|v| opt(*v)),
@@ -578,12 +576,12 @@ fn summary(card: &Scorecard) -> String {
     );
     match card.hub.get() {
         None => {
-            let _ = writeln!(out, "hub      ?");
+            let _ = writeln!(out, "inbox    ?");
         }
         Some(Some(h)) => {
             let _ = writeln!(
                 out,
-                "hub      {}: {} in ({}/day) · {} decisions without a goal · first reply median {} (n {})",
+                "inbox    {}: {} received ({}/day) · {} decisions without a goal · first reply median {} (n {})",
                 h.seat,
                 h.inbound,
                 h.inbound_per_day,
@@ -597,7 +595,7 @@ fn summary(card: &Scorecard) -> String {
     let j = &card.joins;
     let _ = writeln!(
         out,
-        "joins    landing → session {}/{} (seen {}) · verdict citations {}/{} on {} landings · runs attributed {}/{}",
+        "matched  landings to sessions {}/{} (of {} seen) · verdict references {}/{} on {} landings · runs to seats {}/{}",
         count(&j.landing_session),
         count(&j.landings),
         count(&j.landing_session_seen),
@@ -614,7 +612,7 @@ fn summary(card: &Scorecard) -> String {
             .iter()
             .map(|(repo, r)| {
                 format!(
-                    "{repo} {} ({} fail, {} kept no reason)",
+                    "{repo} {} ({} failed, {} with no reason)",
                     r.total, r.fail, r.fail_without_reason
                 )
             })
@@ -706,7 +704,7 @@ fn gauge_column(path: &str) -> &str {
         "active_hours" => "active-h",
         "verdicts_go" => "go",
         "verdicts_return" => "return",
-        "runs_per_landing" => "runs/land",
+        "runs_per_landing" => "tries",
         other => other,
     }
 }
@@ -918,7 +916,7 @@ pub const BOARD: &[Column<Row>] = &[
     Column {
         name: "goal",
         right: false,
-        help: "the goal the seat's latest work cites, then +N for the others it holds.",
+        help: "the goal the seat's latest work references, then +N for its other claimed goals.",
         cell: goal_cell,
     },
     Column {
@@ -957,7 +955,7 @@ pub const BOARD: &[Column<Row>] = &[
     Column {
         name: "unlanded",
         right: true,
-        help: "runs since the seat's last landing (with none, since landings are first read).",
+        help: "runs since the seat's last landing (with none, since the earliest landing data).",
         cell: |r, _| count(&r.runs_since_land),
     },
     Column {
@@ -969,13 +967,13 @@ pub const BOARD: &[Column<Row>] = &[
     Column {
         name: "comments",
         right: true,
-        help: "comments on the lead goal since it was claimed (its findings).",
+        help: "comments on the current goal since it was claimed.",
         cell: |r, _| count(&r.findings),
     },
     Column {
         name: "state",
         right: false,
-        help: "the seat's live session now and for how long: busy (a turn runs) or idle (waiting for a prompt); — when none runs.",
+        help: "the seat's running session and for how long: busy (mid-turn) or idle (waiting for a prompt); — when none is running.",
         cell: |r, now| {
             r.state.as_ref().map_or_else(String::new, |g| {
                 g.cell(|s| {
@@ -990,7 +988,7 @@ pub const BOARD: &[Column<Row>] = &[
     Column {
         name: "flags",
         right: false,
-        help: "what needs acting on, below.",
+        help: "what needs attention, listed below the table when it doesn't fit.",
         cell: |r, _| r.flags.join(" · "),
     },
 ];
@@ -1038,9 +1036,7 @@ pub fn board_help() -> String {
     for (flag, means) in crate::fold::board::FLAGS {
         let _ = writeln!(out, "  {flag}: {means}");
     }
-    out.push_str(
-        "\n`?` marks a value the sources do not cover; the reason is listed under the table.",
-    );
+    out.push_str("\n`?` marks an unknown value; the reason is listed under the table.");
     out
 }
 
@@ -1110,7 +1106,7 @@ pub fn board_in(board: &Board, display: &Display) -> String {
     }
     if !dropped.is_empty() {
         let note = format!(
-            "(hidden to fit {} columns: {}; a wider terminal or a pipe shows them)",
+            "(hidden to fit {} columns: {}; widen the terminal or pipe the output to see them)",
             width.unwrap_or_default(),
             dropped.join(", ")
         );
@@ -1124,9 +1120,8 @@ pub fn board_in(board: &Board, display: &Display) -> String {
         let names: Vec<String> = folded.iter().map(|r| r.seat.clone()).collect();
         let n = names.len();
         let lead = format!(
-            "{n} quiet {} (--all shows {}): ",
-            if n == 1 { "seat" } else { "seats" },
-            if n == 1 { "it" } else { "them" }
+            "{n} inactive {} hidden (--all to show): ",
+            if n == 1 { "seat" } else { "seats" }
         );
         let _ = writeln!(
             out,
@@ -1135,14 +1130,7 @@ pub fn board_in(board: &Board, display: &Display) -> String {
         );
     }
     out.push_str(&overlapping(&shown, display));
-    if !unsourced.is_empty() {
-        let note = format!("not shown, no source reads them: {}", unsourced.join(", "));
-        let _ = writeln!(
-            out,
-            "\n{}",
-            display.paint(Style::Dim, &wrap(&note, width, 2))
-        );
-    }
+    out.push_str(&not_configured(&unsourced, display));
     if !entries.is_empty() {
         out.push('\n');
         for line in reasons(&entries).lines() {
@@ -1153,33 +1141,62 @@ pub fn board_in(board: &Board, display: &Display) -> String {
     out
 }
 
-/// Take out of `columns` each that no source feeds, `?` on every shown row
-/// for want of a source: it is named once, not shown, and its `?` lines go.
+/// Take out of `columns` each that no adapter feeds, `?` on every shown
+/// row for want of one: it goes, its `?` lines go, and it is listed under
+/// the config that would add it. Returns those configs, each with its
+/// columns.
 fn unsourced(
     columns: &mut Vec<Column<Row>>,
     shown: &[&Row],
     entries: &mut Vec<(String, String)>,
-) -> Vec<&'static str> {
+) -> Vec<(String, Vec<&'static str>)> {
+    let mut off: Vec<(String, Vec<&'static str>)> = Vec::new();
     let mut names = Vec::new();
     columns.retain(|c| {
-        let unread = |seat: &str| {
-            entries.iter().any(|(key, why)| {
-                key.split_once(' ').is_some_and(|(s, path)| {
-                    s == seat && gauge_column(path) == c.name && why.starts_with("no source reads")
-                })
+        let hint = |seat: &str| {
+            entries.iter().find_map(|(key, why)| {
+                key.split_once(' ')
+                    .filter(|(s, path)| *s == seat && gauge_column(path) == c.name)
+                    .and_then(|_| why.split_once(NOT_CONFIGURED))
+                    .map(|(_, hint)| hint.to_owned())
             })
         };
-        let none = !shown.is_empty() && shown.iter().all(|r| unread(&r.seat));
-        if none {
-            names.push(c.name);
+        let hints: Option<Vec<String>> = shown.iter().map(|r| hint(&r.seat)).collect();
+        let Some(first) = hints
+            .filter(|h| !h.is_empty())
+            .and_then(|h| h.into_iter().next())
+        else {
+            return true;
+        };
+        names.push(c.name);
+        match off.iter_mut().find(|(h, _)| *h == first) {
+            Some((_, cols)) => cols.push(c.name),
+            None => off.push((first, vec![c.name])),
         }
-        !none
+        false
     });
     entries.retain(|(key, _)| {
         key.split_once(' ')
             .is_none_or(|(_, path)| !names.contains(&gauge_column(path)))
     });
-    names
+    off
+}
+
+/// The columns no adapter feeds, one line per config that would add one:
+/// `  runs, pass  add [adapters.ferry], ...`.
+fn not_configured(off: &[(String, Vec<&'static str>)], display: &Display) -> String {
+    if off.is_empty() {
+        return String::new();
+    }
+    let lead: Vec<String> = off.iter().map(|(_, cols)| cols.join(", ")).collect();
+    let pad = lead.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let mut out = format!("\n{}\n", display.paint(Style::Dim, "not configured:"));
+    for ((hint, _), cols) in off.iter().zip(&lead) {
+        let line = format!("  {cols:<pad$}  {hint}");
+        let text = wrap(&line, display.width, pad + 4);
+        let _ = writeln!(out, "{}", display.paint(Style::Dim, &text));
+    }
+    out
 }
 
 /// The table, fitted to `width`: too wide, the flags go beneath it, then
@@ -1275,7 +1292,10 @@ fn overlapping(rows: &[&Row], display: &Display) -> String {
         .unwrap_or(0);
     let mut out = format!(
         "\n{}\n",
-        display.paint(Style::Bold, "unlanded files shared by workspaces")
+        display.paint(
+            Style::Bold,
+            "files changed in more than one workspace, not yet landed"
+        )
     );
     for (who, files) in lines {
         let who = if width.is_some_and(|w| pad + 24 > w) {
@@ -1313,11 +1333,11 @@ fn unseated(board: &Board, display: &Display) -> String {
     for (owner, goals) in by_owner {
         let line = match goals.as_slice() {
             [one] => format!(
-                "{} is claimed by '{owner}', which is not a seat; {}",
+                "{} is claimed by '{owner}', which isn't a seat; {}",
                 one.goal, one.fix
             ),
             [first, rest @ ..] => format!(
-                "{} goals ({}, +{}) are claimed by '{owner}', which is not a seat; {}",
+                "{} goals ({}, +{}) are claimed by '{owner}', which isn't a seat; {}",
                 goals.len(),
                 first.goal,
                 rest.len(),
@@ -1343,12 +1363,12 @@ mod tests {
         let row = |a: &str, b: &str, c: &str| vec![a.to_owned(), b.to_owned(), c.to_owned()];
         let rows = vec![
             row("seat", "runs", "flags"),
-            row("x-seat-2b", "479", "479 runs since last landing"),
+            row("x-seat-2b", "479", "479 runs, nothing landed"),
             row("x", "—", ""),
         ];
         assert_eq!(
             table(&rows),
-            "seat       runs  flags\nx-seat-2b   479  479 runs since last landing\nx             —\n"
+            "seat       runs  flags\nx-seat-2b   479  479 runs, nothing landed\nx             —\n"
         );
     }
 

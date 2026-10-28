@@ -80,7 +80,10 @@ fn a_gauge_is_a_spec_and_a_column() {
     assert_eq!(grid(COLUMNS, &rows, now), "seat  spawns\nx-1a       ?\n");
     assert_eq!(
         row_unknowns(&rows, |s| s.seat.as_str()),
-        vec![("x-1a spawns".to_owned(), "no source reads spawn".to_owned())]
+        vec![(
+            "x-1a spawns".to_owned(),
+            "spawn not configured; add [adapters.sessions]".to_owned()
+        )]
     );
 
     // the help line, and the output path the spec declares

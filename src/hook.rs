@@ -48,8 +48,8 @@ impl Payload {
         let parsed = serde_json::from_str::<Value>(json);
         let problem = match &parsed {
             Err(_) if json.trim().is_empty() => Some("no hook payload on stdin".to_owned()),
-            Err(_) => Some("the hook payload on stdin is not JSON".to_owned()),
-            Ok(v) if !v.is_object() => Some("the hook payload is not a JSON object".to_owned()),
+            Err(_) => Some("the hook payload on stdin isn't JSON".to_owned()),
+            Ok(v) if !v.is_object() => Some("the hook payload isn't a JSON object".to_owned()),
             Ok(_) => None,
         };
         let v = parsed.unwrap_or(Value::Null);
@@ -133,7 +133,7 @@ pub fn check(sources: &Sources<'_>, input: &str, now: Timestamp) -> (String, boo
         let _ = writeln!(
             report,
             "{} {what}: {detail}",
-            if ok { "ok     " } else { "refused" }
+            if ok { "ok   " } else { "error" }
         );
         ok
     };
@@ -142,7 +142,7 @@ pub fn check(sources: &Sources<'_>, input: &str, now: Timestamp) -> (String, boo
         line(
             false,
             "payload",
-            format!("{problem}; pipe the harness's hook JSON to andon hook --check"),
+            format!("{problem}; pipe the hook's JSON payload to andon hook --check"),
         );
         return (report, false);
     }
@@ -161,7 +161,7 @@ pub fn check(sources: &Sources<'_>, input: &str, now: Timestamp) -> (String, boo
             false,
             "config",
             format!(
-                "no andon.toml in {} or above; add one, or pass --config",
+                "no andon.toml in {} or any parent; create one (andon init > andon.toml) or pass --config",
                 cwd.display()
             ),
         );
@@ -183,7 +183,7 @@ pub fn check(sources: &Sources<'_>, input: &str, now: Timestamp) -> (String, boo
             false,
             "seat",
             format!(
-                "{} belongs to no seat; add it under [seats] (cwd or prefixes)",
+                "{} doesn't match a seat; add it under [seats] (cwd or prefixes)",
                 cwd.display()
             ),
         );
@@ -226,23 +226,19 @@ fn check_transcript_and_row(
                 false,
                 "transcript",
                 format!(
-                    "cannot read a last turn from {}; the hook cannot tell what changed",
+                    "can't find the last turn in {}; changes since then won't be shown",
                     p.display()
                 ),
             );
         }
         (None, _) if payload.event == "SessionStart" => {
-            line(
-                true,
-                "transcript",
-                "none needed at session start".to_owned(),
-            );
+            line(true, "transcript", "not needed at session start".to_owned());
         }
         (None, _) => {
             ok &= line(
                 false,
                 "transcript",
-                "the payload names no transcript_path; the hook cannot tell what changed"
+                "the payload has no transcript_path; changes since the last turn won't be shown"
                     .to_owned(),
             );
         }
@@ -264,7 +260,7 @@ fn check_transcript_and_row(
                     ok &= line(
                         false,
                         "row",
-                        format!("{seat} has no row; add it under [seats]"),
+                        format!("{seat} isn't on the board; add it under [seats]"),
                     );
                 }
             }
@@ -286,7 +282,7 @@ pub fn run(sources: &Sources<'_>, input: &str, now: Timestamp) -> Result<String>
     let payload = Payload::parse(input);
     if let Some(problem) = &payload.problem {
         return Err(anyhow!(
-            "{problem}; the harness hook should pipe its JSON payload to `andon hook`"
+            "{problem}; the hook command must get its JSON payload on stdin"
         ));
     }
     let cwd = match &payload.cwd {
@@ -318,12 +314,12 @@ pub fn run(sources: &Sources<'_>, input: &str, now: Timestamp) -> Result<String>
     // changed: say so rather than look like "nothing changed"
     if payload.event != "SessionStart" && since.is_none() {
         let why = match &payload.transcript {
-            None => "the payload names no transcript_path".to_owned(),
-            Some(p) => format!("cannot read a last turn from {}", p.display()),
+            None => "the payload has no transcript_path".to_owned(),
+            Some(p) => format!("can't find the last turn in {}", p.display()),
         };
         let _ = writeln!(
             text,
-            "andon: hook cannot tell what changed since the last turn: {why}; check the wiring: andon hook --check"
+            "andon: changes since your last turn unavailable: {why}; run andon hook --check"
         );
     }
     Ok(text)
@@ -393,11 +389,7 @@ pub fn render(
         // a count over a span the ledger did not fully read is not the
         // whole count: say which kinds, never a silent undercount (C3)
         let sep = if said.is_empty() { "" } else { "; " };
-        let _ = write!(
-            said,
-            "{sep}not fully read since then: {}",
-            unread.join(", ")
-        );
+        let _ = write!(said, "{sep}incomplete since then: {}", unread.join(", "));
     }
     let _ = writeln!(out, "  since your last turn: {said}");
     out
@@ -495,7 +487,7 @@ fn changes(p: &Projection<'_>, seat: &str, since: Timestamp, now: Timestamp) -> 
     };
     out.extend(verdict("RETURN"));
     if refused > 0 {
-        out.push(format!("land refused ×{refused}"));
+        out.push(format!("land failed ×{refused}"));
     }
     if !lands.is_empty() {
         let n: usize = lands.values().sum();
@@ -643,7 +635,7 @@ mod tests {
         assert_eq!(p.cwd.as_deref(), Some(Path::new("/code/andon-1b")));
         assert_eq!(
             Payload::parse("not json").problem.as_deref(),
-            Some("the hook payload on stdin is not JSON")
+            Some("the hook payload on stdin isn't JSON")
         );
         assert_eq!(
             Payload::parse("").problem.as_deref(),

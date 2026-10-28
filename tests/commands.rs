@@ -41,7 +41,7 @@ fn doctor_fails_naming_the_fix_when_a_source_cannot_be_read() {
         stdout(&ok)
     );
     assert!(
-        stdout(&ok).ends_with("doctor: every configured source reads\n"),
+        stdout(&ok).ends_with("ok: every adapter read\n"),
         "{}",
         stdout(&ok)
     );
@@ -53,10 +53,10 @@ fn doctor_fails_naming_the_fix_when_a_source_cannot_be_read() {
     let failed = andon(dir.path(), &["doctor"]);
     let text = stdout(&failed);
     assert_eq!(failed.status.code(), Some(1), "{text}");
-    assert!(text.contains("cannot  external x-bad"), "{text}");
+    assert!(text.contains("error  external x-bad"), "{text}");
     let last = text.lines().last().unwrap_or_default();
     assert!(
-        last.starts_with("doctor: external x-bad cannot be read; fix: ")
+        last.starts_with("error: external adapter x-bad failed: ")
             && last.contains("no store at /x"),
         "{last}"
     );
@@ -165,10 +165,10 @@ fn goals_and_seats_are_plain_on_a_pipe() {
     // held goals only, newest claim first, then the count of the rest
     assert_eq!(ids(&goals), ["x-ghi", "x-abc"], "{goals}");
     assert!(
-        goals.ends_with("\n2 open goals no one holds, 1 of them assigned (--open lists them)\n"),
+        goals.ends_with("\n2 unclaimed goals hidden, 1 assigned (--open to show)\n"),
         "{goals}"
     );
-    assert!(goals.contains("* Shared User (1) is no seat"), "{goals}");
+    assert!(goals.contains("* Shared User (1) isn't a seat"), "{goals}");
     assert!(!goals.contains('\x1b'), "no color on a pipe: {goals}");
     // --open adds the unheld, newest first, and drops the count line
     let open = stdout(&andon(
@@ -176,7 +176,7 @@ fn goals_and_seats_are_plain_on_a_pipe() {
         &["--ledger", "ledger.jsonl", "goals", "--open"],
     ));
     assert_eq!(ids(&open), ["x-ghi", "x-abc", "x-jkl", "x-def"], "{open}");
-    assert!(!open.contains("no one holds"), "{open}");
+    assert!(!open.contains("unclaimed goals hidden"), "{open}");
     // --all adds the closed
     let all = stdout(&andon(
         dir.path(),

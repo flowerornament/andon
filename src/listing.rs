@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 
 use crate::fold::goals::{Ask, Goals, Listed};
-use crate::fold::seats::Roster;
+use crate::fold::seats::{Identity, Roster};
 use crate::render::{self, Display};
 
 /// A budget as the board shows it: spent of allowed, in its unit.
@@ -27,9 +27,21 @@ fn budget(g: &Listed) -> String {
     }
 }
 
-/// A kind as a reader names it: `comment`, not `other:comment`.
-fn kind(name: &str) -> &str {
-    name.strip_prefix("other:").unwrap_or(name)
+/// A kind as a reader names it, plural: `comments`, not `other:comment`.
+fn kind(name: &str) -> String {
+    match crate::fold::coverage::noun(name) {
+        "session_active" => "sessions".to_owned(),
+        "assigned" => "assignments".to_owned(),
+        "reopen" => "reopens".to_owned(),
+        "edit" => "edits".to_owned(),
+        "spawn" => "spawns".to_owned(),
+        "unlanded" => "unlanded files".to_owned(),
+        // a project's own kind (`other:desk_create`): its words
+        other => other
+            .strip_prefix("other:")
+            .unwrap_or(other)
+            .replace('_', " "),
+    }
 }
 
 /// `path` with the home directory written `~`.
@@ -106,7 +118,7 @@ fn fitted(mut rows: Vec<Vec<String>>, right: &[bool], width: Option<usize>) -> S
     render::aligned(&rows, &right)
 }
 
-/// The line beneath a list that leaves out the goals no one holds.
+/// The line beneath a list that leaves out the unclaimed goals.
 fn unheld(list: &Goals, ask: &Ask<'_>) -> Option<String> {
     let n = list.unheld.filter(|n| *n > 0)?;
     if ask.open || ask.all || ask.seat.is_some() {
@@ -115,14 +127,14 @@ fn unheld(list: &Goals, ask: &Ask<'_>) -> Option<String> {
     let goals = if n == 1 { "goal" } else { "goals" };
     let assigned = match list.assigned.unwrap_or(0) {
         0 => String::new(),
-        k => format!(", {k} of them assigned"),
+        k => format!(", {k} assigned"),
     };
     Some(format!(
-        "{n} open {goals} no one holds{assigned} (--open lists them)\n"
+        "{n} unclaimed {goals} hidden{assigned} (--open to show)\n"
     ))
 }
 
-/// The footnote for owners that are no seat, naming each with its count.
+/// The footnote for owners that aren't seats, naming each with its count.
 fn unseated(goals: &[Listed]) -> Option<String> {
     let mut held: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for g in goals.iter().filter(|g| !g.seated) {
@@ -140,12 +152,12 @@ fn unseated(goals: &[Listed]) -> Option<String> {
         .map(|(owner, n)| format!("{owner} ({n})"))
         .collect();
     let is = if names.len() == 1 {
-        "is no seat"
+        "isn't a seat"
     } else {
-        "are no seats"
+        "aren't seats"
     };
     Some(format!(
-        "* {} {is}; `andon seats` names the fix",
+        "* {} {is}; run andon seats for the fix",
         names.join(", ")
     ))
 }
@@ -157,14 +169,16 @@ pub fn goals(list: &Goals, ask: &Ask<'_>, display: &Display) -> String {
     let Some(goals) = list.goals.get() else {
         return format!(
             "goals: ? {}\n",
-            list.goals.reason().unwrap_or("the tracker is not read")
+            list.goals
+                .reason()
+                .unwrap_or("issues not configured; add [adapters.bd] or [adapters.github]")
         );
     };
     if goals.is_empty() {
         let none = if ask.open || ask.all {
             "no goals\n"
         } else {
-            "no goals held\n"
+            "no claimed goals\n"
         };
         return none.to_owned() + &unheld(list, ask).unwrap_or_default();
     }
@@ -237,7 +251,7 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
             .map(str::to_owned)
             .to_vec(),
     ];
-    let joined_head = format!("joined ({}h)", roster.window_hours);
+    let joined_head = format!("activity ({}h)", roster.window_hours);
     rows[0][4] = joined_head;
     for s in &roster.seats {
         let names: Vec<String> = s
@@ -291,36 +305,11 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
         .unseated
         .iter()
         .partition(|id| id.facts.keys().all(|k| k == "message"));
-    if !strays.is_empty() {
-        let _ = writeln!(
-            out,
-            "\nnames the sources recorded that join no seat, most facts first:"
-        );
-        let mut names = strays;
-        names.sort_by_key(|id| {
-            (
-                std::cmp::Reverse(id.facts.values().sum::<usize>()),
-                id.identity.clone(),
-            )
-        });
-        for id in names {
-            let facts: Vec<String> = id
-                .facts
-                .iter()
-                .map(|(k, n)| format!("{n} {}", kind(k)))
-                .collect();
-            let line = format!("  {}: {}", id.identity, facts.join(", "));
-            out.push_str(&render::wrap(&line, display.width, 4));
-            out.push('\n');
-        }
-        let fix = "fix: add each name to the aliases of the seat it is ([seats.<seat>] aliases), or make its tool record a seat's name";
-        out.push_str(&render::wrap(fix, display.width, 2));
-        out.push('\n');
-    }
+    out.push_str(&unmatched(strays, display));
     if !letters.is_empty() {
         let names: Vec<&str> = letters.iter().map(|id| id.identity.as_str()).collect();
         let line = format!(
-            "\nmessages from {} name{} outside this project's seats: {}",
+            "\nmessages from {} sender{} outside this project: {}",
             names.len(),
             if names.len() == 1 { "" } else { "s" },
             names.join(", ")
@@ -328,5 +317,44 @@ pub fn seats(roster: &Roster, display: &Display) -> String {
         out.push_str(&render::wrap(&line, display.width, 2));
         out.push('\n');
     }
+    out
+}
+
+/// The names that match no seat and did more than send messages, the most
+/// frequent first: the long tail is a count, all of it in `--json`.
+fn unmatched(strays: Vec<&Identity>, display: &Display) -> String {
+    const SHOWN: usize = 10;
+    let mut out = String::new();
+    if strays.is_empty() {
+        return out;
+    }
+    let _ = writeln!(
+        out,
+        "\nunmatched names (no seat's name, alias or prefix), most events first:"
+    );
+    let mut names = strays;
+    names.sort_by_key(|id| {
+        (
+            std::cmp::Reverse(id.facts.values().sum::<usize>()),
+            id.identity.clone(),
+        )
+    });
+    let rest = names.len().saturating_sub(SHOWN);
+    for id in names.into_iter().take(SHOWN) {
+        let facts: Vec<String> = id
+            .facts
+            .iter()
+            .map(|(k, n)| format!("{n} {}", kind(k)))
+            .collect();
+        let line = format!("  {}: {}", id.identity, facts.join(", "));
+        out.push_str(&render::wrap(&line, display.width, 4));
+        out.push('\n');
+    }
+    if rest > 0 {
+        let _ = writeln!(out, "  +{rest} more (--json lists them)");
+    }
+    let fix = "fix: add each to its seat's aliases ([seats.<seat>] aliases), or have its tool record the seat's name";
+    out.push_str(&render::wrap(fix, display.width, 2));
+    out.push('\n');
     out
 }

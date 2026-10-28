@@ -43,7 +43,7 @@ fn no_config_exits_2_and_names_the_fix() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stdout(&out),
-        "andon: cannot decide: no andon.toml here or above; create one: andon init > andon.toml\n"
+        "error: no andon.toml in this directory or any parent; create one: andon init > andon.toml\n"
     );
 }
 
@@ -163,7 +163,7 @@ fn the_hook_names_bad_input_in_one_line_and_still_exits_0() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(
         stdout(&out),
-        "andon: hook cannot decide: the hook payload on stdin is not JSON; the harness hook should pipe its JSON payload to `andon hook`\n"
+        "andon: error: the hook payload on stdin isn't JSON; the hook command must get its JSON payload on stdin\n"
     );
 }
 
@@ -197,7 +197,10 @@ fn a_kept_ledger_replaces_the_sources() {
     assert_eq!(board["seats"][0]["seat"], "andon-1b");
     assert_eq!(board["seats"][0]["landings"], 1);
     // runs were never covered: unknown, with the reason, never 0
-    assert_eq!(board["seats"][0]["runs"]["unknown"], "no source reads runs");
+    assert_eq!(
+        board["seats"][0]["runs"]["unknown"],
+        "runs not configured; add [adapters.ferry], or [adapters.github] with runs = true"
+    );
 }
 
 #[test]
@@ -317,11 +320,7 @@ fn hook_check_reports_the_wiring_and_exits_1_naming_the_fix() {
         &payload("SessionStart", ""),
     );
     assert_eq!(ok.status.code(), Some(0), "{}", stdout(&ok));
-    assert!(
-        stdout(&ok).contains("ok      seat: x-1a"),
-        "{}",
-        stdout(&ok)
-    );
+    assert!(stdout(&ok).contains("ok    seat: x-1a"), "{}", stdout(&ok));
     // a prompt whose transcript cannot be read: refused, naming why
     let bad = payload("UserPromptSubmit", r#","transcript_path":"/nope""#);
     let refused = hook_with(
@@ -330,11 +329,11 @@ fn hook_check_reports_the_wiring_and_exits_1_naming_the_fix() {
         &bad,
     );
     assert_eq!(refused.status.code(), Some(1));
-    assert!(stdout(&refused).contains("refused transcript: cannot read a last turn from /nope"));
+    assert!(stdout(&refused).contains("error transcript: can't find the last turn in /nope"));
     // and the hook itself says so on the prompt, still exiting 0
     let said = hook_with(&["--ledger", "ledger.jsonl", "hook"], dir.path(), &bad);
     assert_eq!(said.status.code(), Some(0));
-    assert!(stdout(&said).contains("hook cannot tell what changed since the last turn"));
+    assert!(stdout(&said).contains("changes since your last turn unavailable"));
     // no andon.toml anywhere above the desk: refused, naming the fix
     let bare = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let none = hook_with(
@@ -346,7 +345,7 @@ fn hook_check_reports_the_wiring_and_exits_1_naming_the_fix() {
         ),
     );
     assert_eq!(none.status.code(), Some(1));
-    assert!(stdout(&none).contains("refused config: no andon.toml"));
+    assert!(stdout(&none).contains("error config: no andon.toml"));
 }
 
 /// andon-e10: every column the board and scorecard print is defined, one
@@ -373,10 +372,10 @@ fn every_column_is_defined_in_help() {
     }
     for flag in [
         "over budget",
-        "goals in progress",
-        "no landing in",
-        "last land refused",
-        "runs since last landing",
+        "WIP N/W",
+        "stalled Nd",
+        "last land failed",
+        "runs, nothing landed",
     ] {
         assert!(
             board.contains(flag),

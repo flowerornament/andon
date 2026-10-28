@@ -141,3 +141,31 @@ A test makes it fire on a planted string.
   return.
 
 Tests that pin old wording change with it. Whoever lands second rebases.
+
+## Amendment: as built (2026-10-28, andon-qn6, andon-30z)
+
+Strings the glossary didn't cover, and what was chosen:
+
+| was | now |
+|---|---|
+| cannot read / run / list | failed to read / run / list (cargo) |
+| land or park one of | land or unclaim one of (bd unclaim) |
+| {seat} holds N goals | {seat} has N goals claimed, WIP W |
+| which the tracker does not have | not found in bd (gh with `[adapters.github]`; "the ledger" with neither) |
+| is not a regular expression | is not a valid regex |
+| reaches before any time andon can read | is out of range |
+| X names N commits; name exactly one | X resolves to N commits; give a revision that resolves to one |
+| git names no commit R | commit R not found in git |
+| an adapter's error context | `[adapters.jj] in andon.toml`; `external adapter NAME` |
+| hook --check marks `ok` / `refused` | `ok` / `error` |
+| doctor marks `ok` / `gaps` / `cannot` | `ok` / `partial` / `error`; columns `adapter`, `available` |
+| seats `joined (24h)` | `activity (24h)` |
+| an event kind (`session_active`, `other:desk_create`) | its words: sessions, desk create |
+
+- **A configured adapter that finds nothing is not "not configured".**
+  ferry with a `receipts` glob that matches no directory reports `no
+  directory matches P; check [adapters.ferry] receipts`, so the footer
+  never tells a reader to add what they already have.
+- **The scan reads only prose:** a literal with no space (a key, a JSON
+  path such as `joins.cites`) is not checked. JSON field names keep their
+  contract names.

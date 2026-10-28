@@ -140,7 +140,7 @@ fn unseated(ledger: &Ledger, config: &Config) -> Vec<Identity> {
     seen.into_iter()
         .map(|(identity, facts)| Identity {
             fix: format!(
-                "add \"{identity}\" to the aliases of the seat it is ([seats.<seat>] aliases), or make its tool record a seat's name"
+                "add \"{identity}\" to its seat's aliases ([seats.<seat>] aliases), or have its tool record the seat's name"
             ),
             identity,
             facts,

@@ -261,7 +261,7 @@ fn knocking_out_one_kind_turns_exactly_its_gauges_unknown() {
             let why = gone
                 .get(&format!("seats.x-1a.{gauge}"))
                 .unwrap_or_else(|| panic!("{kind}: {gauge} stayed known"));
-            assert!(why.starts_with("no source reads"), "{kind}: {gauge}: {why}");
+            assert!(why.contains(" not configured; "), "{kind}: {gauge}: {why}");
         }
         for gauge in wide {
             assert!(
@@ -297,7 +297,7 @@ fn a_window_before_coverage_is_unknown_with_the_horizon_named() {
     assert_eq!(
         c.seats["x-1a"].landings.reason(),
         Some(
-            "landings are read from 2026-10-01 00:00 UTC (land), after this count starts; an earlier since in that adapter covers it"
+            "landings not available before 2026-10-01 00:00 UTC (land); set an earlier since date in its adapter config"
         )
     );
     // the cell itself, not only the reasons line (C9: CARD_CELL)
@@ -358,7 +358,7 @@ fn a_gap_makes_its_kind_unknown_for_every_seat() {
     for seat in ["x-1a", "x-1b"] {
         assert_eq!(
             c.seats[seat].active_hours.reason(),
-            Some("1 sessions source could not be read: t.jsonl: permission denied")
+            Some("sessions: t.jsonl: permission denied")
         );
     }
     // the board's budget spent reads sessions too, in JSON as in text (C8)

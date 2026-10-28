@@ -3,9 +3,9 @@
 //! | code | meaning                                                      |
 //! |------|--------------------------------------------------------------|
 //! | 0    | a surface rendered, or a check passed                        |
-//! | 1    | a check refused; stdout names the fix in one line            |
-//! | 2    | andon could not decide (no config, unreadable source); stdout |
-//! |      | names what to repair in one line                             |
+//! | 1    | a check failed; stdout gives the fix in one line             |
+//! | 2    | error (no config, an adapter failed); stdout gives the fix   |
+//! |      | in one line                                                  |
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -21,8 +21,8 @@ use crate::ledger::Ledger;
 use crate::time::{Window, endpoint_in};
 use crate::{adapters, fold, render};
 
-/// The signal board for many agents on one repository, derived from the
-/// artifacts they already write.
+/// A status board for many coding agents on one repository, built from
+/// what their tools already record.
 #[derive(Debug, Parser)]
 #[command(
     name = "andon",
@@ -34,16 +34,15 @@ With no command, andon prints the board.
 Examples:
   andon                        the board, now
   andon asof yesterday         the board at the end of yesterday
-  andon scorecard 7d           the four gauges over the last seven days
-  andon check commit @         may this commit land? (exit 1 names the fix)
+  andon scorecard 7d           per-seat flow over the last seven days
+  andon check commit @         can this commit land? (exit 1 prints the fix)
   andon init > andon.toml      a starter config
 
-Exit codes: 0 rendered or passed; 1 a check refused; 2 andon could not
-decide (the line says what to repair). Times print in the local zone;
-TZ=UTC andon ... prints UTC."
+Exit codes: 0 ok; 1 a check failed; 2 error. Either failure prints the fix
+in one line. Times print in the local zone; TZ=UTC andon ... prints UTC."
 )]
 pub struct Cli {
-    /// The config file (default: andon.toml here or in the nearest ancestor).
+    /// Config file (default: andon.toml in this directory or the nearest parent).
     #[arg(
         long,
         global = true,
@@ -51,7 +50,7 @@ pub struct Cli {
         help_heading = "Global options"
     )]
     pub config: Option<PathBuf>,
-    /// Read a kept ledger (from `andon ledger`) instead of the sources.
+    /// Read a saved ledger (from `andon ledger`) instead of the adapters.
     #[arg(
         long,
         global = true,
@@ -69,8 +68,7 @@ pub struct Cli {
         help_heading = "Global options"
     )]
     pub color: Color,
-    /// After the output, print each source's read time and event count to
-    /// stderr.
+    /// Print each adapter's read time and event count to stderr.
     #[arg(long, global = true, help_heading = "Global options")]
     pub timings: bool,
     #[command(subcommand)]
@@ -110,46 +108,46 @@ pub enum Command {
         /// Only this seat's row.
         #[arg(long)]
         seat: Option<String>,
-        /// Every seat, the quiet ones too.
+        /// Show inactive seats too.
         #[arg(long)]
         all: bool,
         /// Print the board as JSON (board schema 4, every seat), not text.
         #[arg(long)]
         json: bool,
     },
-    /// Who holds which goal: budget spent and time since the claim.
+    /// Claimed goals: owner, budget spent and time since the claim.
     ///
-    /// The goals someone holds, who holds each, budget spent of allowed,
-    /// and how long since the claim; then how many open goals no one holds.
+    /// Each claimed goal with its owner, budget spent of allowed and time
+    /// since the claim; then a count of the unclaimed open goals.
     #[command(
         after_help = "Examples:\n  andon goals\n  andon goals --open\n  andon goals --seat proj-1a\n  andon goals --all --json | jq '.goals[].id'"
     )]
     Goals {
-        /// Only the goals this seat (or identity) holds.
+        /// Only goals claimed by this seat (or name).
         #[arg(long)]
         seat: Option<String>,
-        /// The open goals no one holds too.
+        /// Include unclaimed open goals.
         #[arg(long)]
         open: bool,
-        /// Open and closed goals: every goal.
+        /// Include unclaimed and closed goals: every goal.
         #[arg(long)]
         all: bool,
         /// The list as JSON (schema 2).
         #[arg(long)]
         json: bool,
     },
-    /// The roster: each seat's names, workspace, session and joins.
+    /// Seats: names, workspace, session and recent activity.
     ///
-    /// Each configured seat with the names that join to it, where it works,
-    /// its live session and what joined to it in the window; then the names
-    /// the sources recorded that join no seat, with the fix.
+    /// Each configured seat with its aliases and prefixes, its workspace, its
+    /// running session and its events in the window; then the names in the
+    /// data that don't match a seat, with the fix.
     #[command(after_help = "Examples:\n  andon seats\n  andon seats --json")]
     Seats {
         /// The roster as JSON (schema 1).
         #[arg(long)]
         json: bool,
     },
-    /// The board as it stood at an instant, replayed from the ledger.
+    /// The board as of a past time, replayed from the ledger.
     #[command(
         after_help = "Examples:\n  andon asof yesterday         the end of yesterday\n  andon asof 2026-10-24        the end of that day\n  andon asof 2026-10-24T09:30  local time\n  andon asof -6h               six hours ago"
     )]
@@ -161,14 +159,14 @@ pub enum Command {
         /// Only this seat's row.
         #[arg(long)]
         seat: Option<String>,
-        /// Every seat, the quiet ones too.
+        /// Show inactive seats too.
         #[arg(long)]
         all: bool,
         /// Print the board as JSON (board schema 4, every seat), not text.
         #[arg(long)]
         json: bool,
     },
-    /// The four laws' gauges per seat over a window, today by default.
+    /// Flow, rework, messages and WIP per seat over a window (default: today).
     #[command(
         long_about = render::scorecard_help(),
         after_help = "Examples:\n  andon scorecard                      today so far\n  andon scorecard yesterday\n  andon scorecard 7d                   the last seven days\n  andon scorecard 2026-10-11..2026-10-12"
@@ -182,15 +180,15 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// A refusal at a choke point: exit 1 naming the fix, or exit 0.
+    /// Gate checks: exit 1 with the fix, or exit 0.
     #[command(
-        after_help = "Examples:\n  andon check commit @                in the land verb, before it moves trunk\n  andon check goal proj-abc           when a goal is filed\n  andon check message ask --goal proj-abc"
+        after_help = "Examples:\n  andon check commit @                in the land recipe, before trunk moves\n  andon check goal proj-abc           when a goal is filed\n  andon check message ask --goal proj-abc"
     )]
     Check {
         #[command(subcommand)]
         what: CheckCommand,
     },
-    /// The seat's row and what changed since its last turn, for a hook.
+    /// The seat's row and changes since its last turn, for an agent hook.
     ///
     /// Reads the hook's JSON payload on stdin and never fails a session: a
     /// problem is one line in the agent's context, and exit 0.
@@ -199,12 +197,12 @@ pub enum Command {
     )]
     Hook {
         /// Check the wiring instead: report the config, seat, workspace and
-        /// transcript this payload resolves to, and exit 1 naming the fix
-        /// when one is missing.
+        /// transcript this payload resolves to, and exit 1 with the fix when
+        /// one is missing.
         #[arg(long)]
         check: bool,
     },
-    /// Print the event ledger as JSONL, for a project to keep and replay.
+    /// Print every event as JSONL, to save and replay with --ledger.
     #[command(
         after_help = "Examples:\n  andon ledger > ledger.jsonl\n  andon --ledger ledger.jsonl asof 2026-10-12\n  andon ledger --since -1d"
     )]
@@ -213,18 +211,17 @@ pub enum Command {
         #[arg(long, allow_hyphen_values = true)]
         since: Option<String>,
     },
-    /// What each source read, and the hook's wiring; exit 1 names the fix.
+    /// Check each adapter and the hook wiring; exit 1 with the fix.
     ///
-    /// For each configured source: its events, the span it covers, its gaps
+    /// For each configured adapter: its events, the span it covers, its gaps
     /// and its time, or its whole error. Then the hook's wiring, as `hook
-    /// --check` reports it. Exits 1, naming the fix, when a source cannot be
-    /// read.
+    /// --check` reports it. Exits 1 with the fix when an adapter fails.
     #[command(after_help = "Example:\n  andon doctor")]
     Doctor,
     /// Print an andon.toml for this repository, from what it finds here.
     ///
     /// It detects the name, jj or git and the trunk, bd's prefix, the jj
-    /// workspaces as seats, and the session, presence and hail sources.
+    /// workspaces as seats, and the session, presence and hail adapters.
     /// It writes nothing: redirect it into place.
     #[command(after_help = "Example:\n  andon init > andon.toml")]
     Init,
@@ -232,25 +229,25 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum CheckCommand {
-    /// The commit cites a goal its seat has claimed, within the seat's WIP.
+    /// The commit references a goal its seat has claimed, within WIP.
     Commit {
         /// A revision: a jj revset naming one commit (`@`, a change id), or
         /// a git revision with [adapters.git].
         rev: String,
-        /// The committing seat, when the commit's trailers do not name it.
+        /// The committing seat, when the commit's trailers don't say.
         #[arg(long)]
         seat: Option<String>,
     },
-    /// The goal has its sections, a done-when that can fail, a finite
-    /// budget, and room in its pool.
+    /// The goal has its sections, a testable done-when, a finite budget,
+    /// and room in its pool.
     Goal {
-        /// The goal's tracker id, or `-` to read a description on stdin.
+        /// The goal's id, or `-` to read a description on stdin.
         id: String,
     },
-    /// A decision kind names the goal it serves.
+    /// A decision message references the goal it serves.
     Message {
-        /// The message's kind (`ask`); `[messages] decision_kinds` must name
-        /// a goal.
+        /// The message's kind (`ask`); kinds in `[messages] decision_kinds`
+        /// must reference a goal.
         kind: String,
         /// The goal the message serves.
         #[arg(long)]
@@ -295,7 +292,7 @@ pub fn main() -> ExitCode {
         Err(error) => {
             // one line on stdout (stdout is the API), the whole chain on it,
             // so the cause that names the fix is not lost
-            let _ = writeln!(stdout, "andon: cannot decide: {error:#}");
+            let _ = writeln!(stdout, "error: {error:#}");
             ExitCode::from(2)
         }
     };
@@ -312,7 +309,7 @@ pub fn main() -> ExitCode {
 /// Run a parsed command, writing its output to `out`.
 ///
 /// # Errors
-/// When andon cannot decide: missing config, unreadable source, bad input.
+/// An error: missing config, an adapter that failed, bad input.
 pub fn run(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
     let shown = |all: bool| render::Display {
         all,
@@ -443,7 +440,7 @@ fn hook(cli: &Cli, check: bool, out: &mut dyn Write) -> Result<ExitCode> {
         // say so, in one line the agent sees, but never fail the
         // session (an exit of 2 would block the prompt)
         Err(error) => {
-            let _ = writeln!(out, "andon: hook cannot decide: {error:#}");
+            let _ = writeln!(out, "andon: error: {error:#}");
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -463,7 +460,7 @@ fn check(
             .check_state(crate::fold::gauge::TRACKER, None, now)
             .map_or(Ok(()), |why| {
                 Err(anyhow!(
-                    "the tracker is not covered ({why}); configure a tracker adapter"
+                    "goals unavailable ({why}); add [adapters.bd] or [adapters.github]"
                 ))
             })
     };
@@ -497,7 +494,7 @@ fn check(
                 (None, Some(gc)) => adapters::git::describe(config, gc, rev)?,
                 (None, None) => {
                     return Err(anyhow!(
-                        "check commit reads the commit through [adapters.jj] or [adapters.git]; configure one"
+                        "check commit needs [adapters.jj] or [adapters.git]; add one"
                     ));
                 }
             };
@@ -523,9 +520,9 @@ fn check(
                     .adapters
                     .bd
                     .as_ref()
-                    .ok_or_else(|| anyhow!("check goal reads goals through [adapters.bd]; configure it, or pipe the description to: andon check goal -"))?;
+                    .ok_or_else(|| anyhow!("check goal needs [adapters.bd]; add it, or pipe the description to andon check goal -"))?;
                 adapters::bd::description(config, bc, id)?
-                    .ok_or_else(|| anyhow!("the tracker has no goal {id}"))?
+                    .ok_or_else(|| anyhow!("goal {id} not found"))?
             };
             let name = if id == "-" {
                 "the description"
@@ -554,7 +551,7 @@ fn show_board(
         board.seats.retain(|r| r.seat == seat);
         if board.seats.is_empty() {
             return Err(anyhow!(
-                "no seat {seat} on the board; add it under [seats] in andon.toml"
+                "seat {seat} not found; add it under [seats] in andon.toml"
             ));
         }
     }
@@ -600,7 +597,9 @@ pub fn load_config(cli: &Cli, capture: Timestamp) -> Result<Config> {
     } else {
         let here = std::env::current_dir().context("no working directory")?;
         Config::find(&here).ok_or_else(|| {
-            anyhow!("no andon.toml here or above; create one: andon init > andon.toml")
+            anyhow!(
+                "no andon.toml in this directory or any parent; create one: andon init > andon.toml"
+            )
         })?
     };
     let mut config = Config::load(&path)?;
@@ -667,7 +666,9 @@ fn doctor(cli: &Cli, out: &mut dyn Write) -> Result<ExitCode> {
     let path = match &cli.config {
         Some(p) => p.clone(),
         None => Config::find(&here).ok_or_else(|| {
-            anyhow!("no andon.toml here or above; create one: andon init > andon.toml")
+            anyhow!(
+                "no andon.toml in this directory or any parent; create one: andon init > andon.toml"
+            )
         })?,
     };
     let config = load_config(cli, now)?;

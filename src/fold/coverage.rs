@@ -181,12 +181,10 @@ impl Coverage {
             })
             .collect();
         if let Some(first) = gaps.first() {
-            let n = gaps.len();
-            let sources = if n == 1 { "source" } else { "sources" };
-            return Some(format!(
-                "{n} {names} {sources} could not be read: {}",
-                first.reason
-            ));
+            return Some(match gaps.len() {
+                1 => format!("{names}: {}", first.reason),
+                n => format!("{names}: {n} reads failed; first: {}", first.reason),
+            });
         }
         let mut spans: Vec<&Span> = self
             .spans
@@ -198,11 +196,11 @@ impl Coverage {
             let state = format!("state:{kind}");
             if let Some(s) = self.spans.iter().find(|s| s.covers.contains(&state)) {
                 return Some(format!(
-                    "{names} are read only as current state, not history ({})",
+                    "{names} have no history, only their current state ({})",
                     s.source
                 ));
             }
-            return Some(format!("no source reads {names}"));
+            return Some(format!("{names}{NOT_CONFIGURED}{}", enable(kind)));
         }
         spans.sort_by_key(|s| s.from);
         // walk the union of the spans from `from`; any hole before `to` is
@@ -232,7 +230,7 @@ impl Coverage {
         let earliest = spans[0];
         if earliest.from > from {
             Some(format!(
-                "{names} are read from {} ({}), after this count starts; an earlier since in that adapter covers it",
+                "{names} not available before {} ({}); set an earlier since date in its adapter config",
                 day(earliest.from),
                 earliest.source
             ))
@@ -246,11 +244,33 @@ impl Coverage {
                 spans.iter().filter_map(|s| s.to).max().unwrap_or(reached)
             };
             Some(format!(
-                "{names} are read only until {} ({})",
+                "{names} not available after {} ({})",
                 day(until),
                 earliest.source
             ))
         }
+    }
+}
+
+/// Between a kind no adapter reads and the config that adds one: the
+/// board groups its dropped columns by what follows.
+pub const NOT_CONFIGURED: &str = " not configured; ";
+
+/// The config that adds an adapter reading `kind`.
+#[must_use]
+pub fn enable(kind: &str) -> &'static str {
+    match kind.strip_prefix("state:").unwrap_or(kind) {
+        "land" | "commit" => "add [adapters.jj] or [adapters.git]",
+        "run" => "add [adapters.ferry], or [adapters.github] with runs = true",
+        "gate_run" => "add [adapters.ferry]",
+        "verdict" => "add [adapters.bd.verdicts] or [adapters.github]",
+        "message" => "add [adapters.hail]",
+        "create" | "claim" | "close" | "reopen" | "assign" | "other:comment" => {
+            "add [adapters.bd] or [adapters.github]"
+        }
+        "session_active" | "edit" | "spawn" => "add [adapters.sessions]",
+        "presence" => "add [adapters.presence]",
+        _ => "add an adapter that reads them",
     }
 }
 
@@ -265,18 +285,18 @@ fn day(t: Timestamp) -> String {
 pub fn noun(kind: &str) -> &str {
     match kind {
         "land" => "landings",
-        "commit" => "change starts",
+        "commit" => "commits",
         "run" => "runs",
         "gate_run" => "gate runs",
         "verdict" => "verdicts",
         "message" => "messages",
-        "create" => "tracker items",
+        "create" => "issues",
         "claim" => "claims",
         "close" => "closes",
         "session_active" => "sessions",
-        "presence" | "state:presence" => "live sessions",
+        "presence" | "state:presence" => "running sessions",
         "other:comment" => "comments",
-        "state:create" | "state:claim" | "state:close" => "goal states",
+        "state:create" | "state:claim" | "state:close" => "goal status",
         other => other,
     }
 }
@@ -322,7 +342,7 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "landings are read from 2026-10-09 00:00 UTC (jj), after this count starts; an earlier since in that adapter covers it"
+                "landings not available before 2026-10-09 00:00 UTC (jj); set an earlier since date in its adapter config"
             )
         );
         assert_eq!(
@@ -333,7 +353,7 @@ mod tests {
                 at("2026-10-15T00:00:00Z")
             )
             .as_deref(),
-            Some("landings are read only until 2026-10-14 00:00 UTC (jj)")
+            Some("landings not available after 2026-10-14 00:00 UTC (jj)")
         );
         assert_eq!(
             c.check(
@@ -343,7 +363,9 @@ mod tests {
                 at("2026-10-11T00:00:00Z")
             )
             .as_deref(),
-            Some("no source reads runs")
+            Some(
+                "runs not configured; add [adapters.ferry], or [adapters.github] with runs = true"
+            )
         );
     }
 
@@ -361,7 +383,7 @@ mod tests {
         // after the capture, the reason names the capture, not the instant
         assert_eq!(
             c.check(&["state:claim"], None, late, late).as_deref(),
-            Some("goal states are read only until 2026-10-14 04:00 UTC (bd)")
+            Some("goal status not available after 2026-10-14 04:00 UTC (bd)")
         );
         assert_eq!(c.check_state(&["claim"], None, at4), None);
     }
@@ -410,7 +432,7 @@ mod tests {
                 at("2026-10-03T00:00:00Z")
             )
             .as_deref(),
-            Some("1 sessions source could not be read: x.jsonl: permission denied")
+            Some("sessions: x.jsonl: permission denied")
         );
     }
 

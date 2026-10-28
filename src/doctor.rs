@@ -29,12 +29,12 @@ pub fn doctor(
     if reads.is_empty() {
         let _ = writeln!(
             out,
-            "\nno sources are configured; add an [adapters] table (andon init prints one)"
+            "\nno adapters configured; add an [adapters.<name>] table (andon init prints a starter config)"
         );
         return (out, false);
     }
     let mut rows = vec![
-        ["", "source", "events", "covers", "time"]
+        ["", "adapter", "events", "available", "time"]
             .map(str::to_owned)
             .to_vec(),
     ];
@@ -57,6 +57,7 @@ pub fn doctor(
             out.push('\n');
         }
     }
+    out.push_str(&columns_off(&reads, display));
     // the hook, as a session starting here would run it
     let payload = serde_json::json!({
         "hook_event_name": "SessionStart",
@@ -76,24 +77,83 @@ pub fn doctor(
         let _ = writeln!(
             out,
             "{}",
-            render::wrap(&format!("  {line}"), display.width, 10)
+            render::wrap(&format!("  {line}"), display.width, 8)
         );
     }
     match failed.first() {
         None => {
-            let _ = writeln!(out, "\ndoctor: every configured source reads");
+            let partial = match notes.len() {
+                0 => String::new(),
+                n => format!(" ({n} with warnings above)"),
+            };
+            let _ = writeln!(out, "\nok: every adapter read{partial}");
         }
         Some((name, error)) => {
             let n = failed.len();
             let more = if n > 1 {
-                format!(" ({n} sources cannot)")
+                format!(" ({n} adapters failed)")
             } else {
                 String::new()
             };
-            let _ = writeln!(out, "\ndoctor: {name} cannot be read{more}; fix: {error}");
+            let name = name.strip_prefix("external ").map_or_else(
+                || format!("[adapters.{name}]"),
+                |n| format!("external adapter {n}"),
+            );
+            let _ = writeln!(out, "\nerror: {name} failed{more}: {error}");
         }
     }
     (out, failed.is_empty())
+}
+
+/// The board's columns no configured adapter feeds, grouped by the config
+/// that would add one, as the board lists them.
+fn columns_off(reads: &[adapters::AdapterRead], display: &Display) -> String {
+    const COLUMNS: &[(&str, &str)] = &[
+        ("goal", "claim"),
+        ("budget", "session_active"),
+        ("lands", "land"),
+        ("landed", "land"),
+        ("runs", "run"),
+        ("pass", "run"),
+        ("unlanded", "run"),
+        ("verdict", "verdict"),
+        ("comments", "other:comment"),
+        ("state", "state:presence"),
+    ];
+    let events: Vec<_> = reads
+        .iter()
+        .filter_map(|r| r.got.as_ref().ok())
+        .flatten()
+        .cloned()
+        .collect();
+    let ledger = crate::ledger::Ledger::new(events);
+    let coverage = crate::fold::coverage::Coverage::new(&ledger);
+    let mut off: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (column, kind) in COLUMNS {
+        if coverage.reads(kind) || coverage.reads(&format!("state:{kind}")) {
+            continue;
+        }
+        let hint = crate::fold::coverage::enable(kind);
+        match off.iter_mut().find(|(h, _)| *h == hint) {
+            Some((_, cols)) => cols.push(column),
+            None => off.push((hint, vec![column])),
+        }
+    }
+    if off.is_empty() {
+        return String::new();
+    }
+    let lead: Vec<String> = off.iter().map(|(_, cols)| cols.join(", ")).collect();
+    let pad = lead.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let mut out = String::from("\nboard columns not configured:\n");
+    for ((hint, _), cols) in off.iter().zip(&lead) {
+        out.push_str(&render::wrap(
+            &format!("  {cols:<pad$}  {hint}"),
+            display.width,
+            pad + 4,
+        ));
+        out.push('\n');
+    }
+    out
 }
 
 /// One source's row (mark, name, events, span covered, time) and its notes:
@@ -105,7 +165,7 @@ fn source_row(read: &adapters::AdapterRead, display: &Display) -> (Vec<String>, 
         Err(error) => {
             return (
                 vec![
-                    "cannot".to_owned(),
+                    "error".to_owned(),
                     read.name.clone(),
                     "—".to_owned(),
                     "—".to_owned(),
@@ -125,7 +185,7 @@ fn source_row(read: &adapters::AdapterRead, display: &Display) -> (Vec<String>, 
         .filter(|e| e.kind == Kind::Coverage && e.outcome == Some(Outcome::Fail))
         .map(|e| {
             format!(
-                "{}: gap: {}",
+                "{}: {}",
                 read.name,
                 e.attr_str(attr::GAP_REASON).unwrap_or("unreadable")
             )
@@ -134,10 +194,10 @@ fn source_row(read: &adapters::AdapterRead, display: &Display) -> (Vec<String>, 
     let from = spans.iter().map(|e| e.t).min();
     let to = spans.iter().filter_map(|e| e.t_end).max();
     let covers = match from {
-        None => "nothing".to_owned(),
+        None => "no data".to_owned(),
         Some(f) => {
             let f = if f == ALL_HISTORY {
-                "all history".to_owned()
+                "all".to_owned()
             } else {
                 display.bare_time(f)
             };
@@ -147,7 +207,7 @@ fn source_row(read: &adapters::AdapterRead, display: &Display) -> (Vec<String>, 
             )
         }
     };
-    let mark = if gaps.is_empty() { "ok" } else { "gaps" };
+    let mark = if gaps.is_empty() { "ok" } else { "partial" };
     (
         vec![
             mark.to_owned(),

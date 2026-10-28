@@ -4,6 +4,31 @@ All notable changes to `andon` are documented in this file.
 
 ## Unreleased
 
+- **Plain wording** (`.design/2026-10-27-plain-wording.md`). Every line
+  andon prints now reads the way git, cargo and bd would put it: `error:`,
+  `warning:` and `ok:` prefixes, tools named (bd, jj, git, gh, hail,
+  ferry), and the standard verbs (claimed, references, matches). Lean
+  terms where they name the concept: WIP, cycle time, stalled, tries.
+  `tests/wording.rs` fails on the retired phrasings.
+  - `check` prints `ok:`, `warning:` or `error:`, no longer `refused:`
+    or `warn:`. andon's own failures print `error:` (still exit 2).
+  - Board flags: `WIP 3/1` (was `3 goals in progress, WIP 1`), `stalled
+    6.2d` (was `no landing in 6.2d`), `last land failed`, `idle 2.5h with G
+    claimed`, `N runs, nothing landed`. Inactive seats (were "quiet") are
+    hidden behind one line, `--all to show`.
+  - A column nothing configured feeds is listed under `not configured:`,
+    grouped by the adapter that would add it, in place of "not shown, no
+    source reads them". `doctor` lists the same columns.
+  - A ferry `receipts` path that matches no directory is reported as
+    such, not as ferry missing from the config.
+  - `?` reasons say "not configured", "not available before D" or "no
+    history, only current state", in `--json` too. No JSON field changes;
+    the board stays at schema 4.
+  - Scorecard text: `runs/land` is `tries`; the summary lines are `cycle`,
+    `issues`, `inbox` and `matched`.
+  - `goals`: "N unclaimed goals hidden (--open to show)". `seats`:
+    "unmatched names", event kinds in words, the ten most frequent shown.
+
 ## v0.4.0 - 2026-10-27
 
 A first-class interface (`.design/2026-10-27-first-class-interface.md`):

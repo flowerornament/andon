@@ -1,8 +1,8 @@
 # andon
 
-The signal board for many agents on one repository, derived from the artifacts they already write.
+A status board for many coding agents on one repository, built from what their tools already record.
 
-andon reads what a team of agents already leaves behind (commits, landings, review verdicts, test runs, tracker claims, session transcripts, messages) and shows, per seat: the goal it holds, the budget it has spent, what it landed, how its runs went, its last verdict, and what needs acting on. Nobody updates a status. andon writes nothing anywhere; it prints, and its checks exit non-zero with the fix named.
+andon reads what a team of agents already leaves behind (commits, landings, review verdicts, CI runs, issue claims, session transcripts, messages) and shows, per seat: the goal it has claimed, the budget spent, what it landed, how its runs went, its last verdict, and what needs attention. Nobody updates a status. andon writes nothing anywhere: it prints, and its checks exit non-zero and print the fix.
 
 ```
 $ andon
@@ -16,12 +16,12 @@ proj-2b  proj-m7p +1  6.0/4 agent-h      0   6d ago     0     —         0  GO 
 
 flags
   proj-1b  over budget on proj-q8d
-  proj-2b  2 goals in progress, WIP 1 · over budget on proj-m7p · no landing in 5.2d
+  proj-2b  WIP 2/1 · over budget on proj-m7p · stalled 5.2d
 
-1 quiet seat (--all shows it): proj-3a
+1 inactive seat hidden (--all to show): proj-3a
 ```
 
-A `?` is a value no source covers, never a 0; the reason prints beneath the table. `andon board --help` defines every column and flag.
+A `?` is an unknown value, never a 0; the reason prints under the table. A column nothing configured feeds is left out and listed under `not configured:` with the adapter that adds it. `andon board --help` defines every column and flag.
 
 ## Quickstart
 
@@ -37,7 +37,7 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
    andon init > andon.toml
    ```
 
-   Name each seat (one per agent or workspace) under `[seats]`, and point the adapters at the tools you use. Identity comes first: every fact joins to a seat by the name its tool recorded, so each agent must act under its seat's name. With bd, set `BEADS_ACTOR=<seat>` in the seat's environment; a claim made as your git user belongs to no seat, and the board says so.
+   Name each seat (one per agent or workspace) under `[seats]`, and point the adapters at the tools you use. Identity comes first: every event is matched to a seat by the name its tool recorded, so each agent must act under its seat's name. With bd, set `BEADS_ACTOR=<seat>` in the seat's environment; a claim made as your git user matches no seat, and the board says so.
 
 3. **Look.**
 
@@ -47,7 +47,7 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
    andon scorecard 7d            # the four gauges over the last week
    ```
 
-4. **Wire the refusals** into the choke points the project already has: `andon check commit @` in the land verb, `andon check goal <id>` when a goal is filed, `andon check message <kind>` in the messenger's send.
+4. **Wire the checks** into the gates the project already has: `andon check commit @` in the land recipe, `andon check goal <id>` when a goal is filed, `andon check message <kind>` before a message is sent.
 
 5. **Put the board in each agent's turn.** Add `andon hook` as a Claude Code `UserPromptSubmit` (or `SessionStart`) hook, or a Codex hook. Each turn starts with one line: the seat's row, and what changed since its last turn. `echo '<payload>' | andon hook --check` checks the wiring.
 
@@ -55,17 +55,17 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
 
 | Command | What it does |
 |---|---|
-| `andon` / `andon board [--seat S] [--all] [--json]` | One row per seat now. Quiet seats (no goal, nothing in the window) fold into one line. |
-| `andon goals [--seat S] [--open] [--all] [--json]` | The goals someone holds: who holds each (a name that is no seat is marked `*`), budget spent of allowed, and how long since the claim, then a count of the open goals no one holds. `--open` lists those too, `--all` the closed ones as well. |
-| `andon seats [--json]` | The roster: each seat's aliases and prefixes, where it works, its live session and what joined to it in the window; then every name the sources recorded that joins no seat, with the fix. |
-| `andon asof WHEN` | The board as it stood at an instant, replayed from the ledger. A date means its end. |
-| `andon scorecard [WINDOW]` | Per seat over a window (default today): landings, runs, verdicts, messages, tracker items, active hours; then flow medians, the tracker's branching, the hub and how well the joins held. |
-| `andon check commit REV` | The commit cites a goal its seat has claimed, within WIP. |
+| `andon` / `andon board [--seat S] [--all] [--json]` | One row per seat now. Inactive seats (no goal, nothing in the window) are hidden behind one line. |
+| `andon goals [--seat S] [--open] [--all] [--json]` | Claimed goals: the owner (a name that isn't a seat is marked `*`), budget spent of allowed, and time since the claim, then a count of unclaimed open goals. `--open` lists those too, `--all` the closed ones as well. |
+| `andon seats [--json]` | Each seat's aliases and prefixes, workspace, running session and activity in the window; then the names in the data that don't match a seat, with the fix. |
+| `andon asof WHEN` | The board as of a past time, replayed from the ledger. A date means its end. |
+| `andon scorecard [WINDOW]` | Per seat over a window (default today): landings, runs, tries per landing, verdicts, messages, issues, WIP, active hours; then cycle time, issue flow, the busiest inbox, and how many events matched a seat. |
+| `andon check commit REV` | The commit references a goal its seat has claimed, within WIP. |
 | `andon check goal ID` | The goal has its sections, a done-when that can fail, a finite budget, and room in its pool. |
 | `andon check message KIND` | A decision names the goal it serves. |
 | `andon hook` | The seat's row for a harness hook. Never fails a session. |
 | `andon ledger` | Every event as JSONL, to keep; `--ledger FILE` reads it back instead of the sources. |
-| `andon doctor` | What each configured source read: its events, the span it covers, its gaps and its time, or its whole error; then the hook's wiring. Exits 1, naming the fix, when a source cannot be read. |
+| `andon doctor` | Each configured adapter: its events, the time range available, warnings and read time, or its error; the board columns not configured; then the hook's wiring. Exits 1 with the fix when an adapter fails. |
 | `andon init` | An `andon.toml` for this repository, from what it finds: its name, jj or git and the trunk, bd's issue prefix, jj workspaces as seats, Claude Code's session files and hail. |
 
 **Times.** Text prints times in the local zone, with the zone named; `TZ=UTC andon …` prints UTC, and `--json` is always UTC. A time is a date (`2026-10-24`), a local time (`2026-10-24T09:30`), an exact one (`…Z` or an offset), `now`, `today`, `yesterday`, `-6h` or `-2d`. A window is a day, `FROM..TO`, `FROM..`, or the last `6h` or `2d`.
@@ -74,7 +74,7 @@ A `?` is a value no source covers, never a 0; the reason prints beneath the tabl
 
 **Cache.** andon writes into no repository or tracker. To read in seconds it keeps transcript parses, jj's operation log and bd's event rows under `~/.cache/andon` (`$XDG_CACHE_HOME/andon`, or `$ANDON_CACHE`), each checked against its source before use: deleting it changes no output, and `ANDON_CACHE=off` keeps nothing.
 
-**Exit codes.** 0 rendered or passed; 1 a check refused, and stdout names the fix in one line; 2 andon could not decide, and the line says what to repair.
+**Exit codes.** 0 ok; 1 a check failed; 2 error. Either failure prints one line to stdout with the fix.
 
 ## Adapters
 
@@ -90,18 +90,18 @@ All read-only. Configure the ones the project uses:
 | `hail` | messages between seats |
 | `external` | anything else: a project's own program or files that print andon events as JSONL |
 
-Every adapter records what it could see. A gauge whose span its sources do not cover reads `?` with the reason (`.design/2026-10-14-coverage.md`). A project's conventions (a trailer name, a subject pattern, a bot account) are configuration, never code; andon's code names no project (`tests/boundary.rs`). The external adapter contract is `.design/2026-10-14-project-boundary.md`.
+Every adapter records what it could see. A value outside what its adapters could read is `?`, with the reason (`.design/2026-10-14-coverage.md`). A project's conventions (a trailer name, a subject pattern, a bot account) are configuration, never code; andon's code mentions no project (`tests/boundary.rs`). The external adapter contract is `.design/2026-10-14-project-boundary.md`.
 
 ## Configuration reference
 
-`andon.toml` is read from the current directory or its nearest ancestor (`--config FILE` names another). Every key, at its default; a key marked *example* has no default and shows a typical value. Unknown keys are refused.
+`andon.toml` is read from the current directory or the nearest parent (`--config FILE` picks another). Every key, at its default; a key marked *example* has no default and shows a typical value. Unknown keys are an error.
 
 ```toml
 [project]
 name = ""                                   # the project's name
 goal_pattern = '\(([a-z][a-z0-9]*-[a-z0-9]{3,8}(?:\.[0-9]+)*)\)'  # a goal id; its group is the id
-goal_in = "subject"                         # where a commit cites its goal: subject | message
-known_goals_only = true                     # keep only ids the tracker has
+goal_in = "subject"                         # where a commit references its goal: subject | message
+known_goals_only = true                     # keep only ids found in the issue tracker
 land_recipe = "land"                        # the gate recipe that is the land verb
 
 [seats.proj-1a]                             # one table per seat (example)
@@ -140,9 +140,9 @@ hubs = []                                   # seats whose inbound load is the hu
 
 [board]
 window_hours = 24.0                         # the window the board's counts cover
-no_land_days = 1.0                          # flag a held goal with no landing in this many days
+no_land_days = 1.0                          # flag a claimed goal stalled (no landing) this many days
 runs_without_land = 20                      # flag this many runs since the last landing
-idle_minutes = 60.0                         # flag a live session idle this long holding a goal
+idle_minutes = 60.0                         # flag a session idle this long with a goal claimed
 budget_unit = "agent-hours"                 # how agent-hours are counted: agent-hours | wall-clock
 
 [adapters.jj]
@@ -154,7 +154,7 @@ since = "2026-10-01"                        # read history from here (example; d
 session = "Session"
 workspace = "Jj-Workspace"
 seat = "Seat"                               # names the committing seat (example; default: none)
-critic = "Critic"                           # cites a verdict (example; default: none)
+critic = "Critic"                           # references a verdict (example; default: none)
 critic_id_word = 1                          # which word of the citation is the verdict id
 keep = []                                   # other trailers kept on landings
 

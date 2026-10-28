@@ -31,11 +31,13 @@ pub fn collect(config: &Config, fc: &FerryConfig) -> Result<Vec<Event>> {
     let mut duplicates = 0_usize;
     let now = config.capture()?;
     let mut reads = Reads::default();
+    let mut matched = 0_usize;
     for pattern in &fc.receipts {
         // a directory the pattern passes through that cannot be listed: whose
         // receipts it held is unknown, so it is a gap for every seat
         let mark = reads.unreadable.len();
         let dirs = reads.glob(&config.path(pattern));
+        matched += dirs.len();
         events.extend(reads.gaps_since(mark, now, &["run"], None));
         for dir in dirs {
             let workspace = workspace_of(&config.path(pattern), &dir);
@@ -116,6 +118,16 @@ pub fn collect(config: &Config, fc: &FerryConfig) -> Result<Vec<Event>> {
             fc.receipts.join(", "),
             None,
         ));
+    } else if !events.iter().any(|e| e.kind == Kind::Coverage) {
+        // configured, and nothing found: runs are unknown, and the reason is
+        // the path, not a missing adapter
+        let patterns = fc.receipts.join(", ");
+        let why = if matched == 0 {
+            format!("no directory matches {patterns}; check [adapters.ferry] receipts")
+        } else {
+            format!("no receipts in {patterns} yet")
+        };
+        events.push(crate::event::gap(now, &["run"], patterns, None, why));
     }
     Ok(events)
 }

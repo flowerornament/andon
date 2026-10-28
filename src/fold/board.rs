@@ -107,28 +107,28 @@ pub const FLAGS: &[(&str, &str)] = &[
         "more effort spent on G than its budget allows.",
     ),
     (
-        "N goals in progress, WIP W",
-        "more claimed goals of a counted type (`[goal] types`) than the seat may hold.",
+        "WIP N/W",
+        "N goals of a counted type (`[goal] types`) claimed, over the seat's WIP limit W.",
     ),
     (
-        "no landing in Nd",
-        "the lead goal has gone N days with no landing (not for hubs).",
+        "stalled Nd",
+        "the current goal has had no landing for N days (`[board] no_land_days`; not for hubs).",
     ),
     (
-        "last land refused",
-        "the seat's last land run after its last landing failed or was refused.",
+        "last land failed",
+        "the seat's last land run since its last landing failed.",
     ),
     (
-        "idle Nh holding G",
-        "the seat's live session has waited N hours for a prompt while it holds G (`[board] idle_minutes`).",
+        "idle Nh with G claimed",
+        "the seat's session has waited N hours for a prompt while G is claimed (`[board] idle_minutes`).",
     ),
     (
-        "N runs since last landing",
-        "runs piling up with nothing landed (not for hubs).",
+        "N runs, nothing landed",
+        "N runs since the seat's last landing (`[board] runs_without_land`; not for hubs).",
     ),
     (
         "overlaps S (N files)",
-        "files the seat's workspace changed and has not landed that seat S's has too, as of each workspace's last jj snapshot; the files are listed under the table (`?` where a workspace could not be read).",
+        "N files changed in both this seat's and S's workspace, not yet landed, as of each workspace's last jj snapshot; listed under the table (`?` where a workspace couldn't be read).",
     ),
 ];
 
@@ -709,7 +709,7 @@ fn flags(
     // project chose neither
     let counted = held.iter().filter(|g| g.counts).count();
     if config.goal_schema() && counted > wip {
-        flags.push(format!("{counted} goals in progress, WIP {wip}"));
+        flags.push(format!("WIP {counted}/{wip}"));
     }
     for goal in held
         .iter()
@@ -731,7 +731,7 @@ fn flags(
         if let (Some(t), true) = (quiet_since, covered) {
             let days = minutes(t, asof) / 1_440.0;
             if days >= config.board.no_land_days {
-                flags.push(format!("no landing in {days:.1}d"));
+                flags.push(format!("stalled {days:.1}d"));
             }
         }
     }
@@ -741,7 +741,7 @@ fn flags(
         && minutes(state.since, asof) >= config.board.idle_minutes
     {
         let hours = minutes(state.since, asof) / 60.0;
-        flags.push(format!("idle {hours:.1}h holding {}", goal.id));
+        flags.push(format!("idle {hours:.1}h with {} claimed", goal.id));
     }
     // a refused land run after the last landing: only where the last landing
     // is known, so no later landing went unread
@@ -753,7 +753,7 @@ fn flags(
         && last_land.is_none_or(|l| run.t > l)
         && p.refused_land(run)
     {
-        flags.push("last land refused".to_owned());
+        flags.push("last land failed".to_owned());
     }
     // an overlap speaks where every workspace was read; `?` where one was
     // looked at and could not be read
@@ -768,11 +768,11 @@ fn flags(
         && *n >= config.board.runs_without_land
     {
         if last_land.is_some() {
-            flags.push(format!("{n} runs since last landing"));
+            flags.push(format!("{n} runs, nothing landed"));
         } else if let Some(from) = row.runs_from {
             // no landing in the ledger: say from where it could have seen one
             flags.push(format!(
-                "{n} runs and no landing since {}",
+                "{n} runs, nothing landed since {}",
                 from.to_zoned(jiff::tz::TimeZone::UTC).strftime("%Y-%m-%d")
             ));
         }
@@ -874,7 +874,8 @@ mod tests {
         let state = row.state.as_ref().and_then(Gauge::get).cloned().flatten();
         assert_eq!(state.map(|s| s.status), Some("idle".to_owned()));
         assert!(
-            row.flags.contains(&"idle 2.5h holding x-goal".to_owned()),
+            row.flags
+                .contains(&"idle 2.5h with x-goal claimed".to_owned()),
             "{:?}",
             row.flags
         );
@@ -944,13 +945,13 @@ mod tests {
         assert_eq!(row.runs_since_land, 2);
         assert!(
             row.flags
-                .contains(&"2 runs and no landing since 2026-10-09".to_owned()),
+                .contains(&"2 runs, nothing landed since 2026-10-09".to_owned()),
             "{:?}",
             row.flags
         );
         // quiet is counted from where landings are covered, not the claim
         assert!(
-            row.flags.contains(&"no landing in 3.0d".to_owned()),
+            row.flags.contains(&"stalled 3.0d".to_owned()),
             "{:?}",
             row.flags
         );
@@ -963,11 +964,14 @@ mod tests {
             .find(|r| r.seat == "x-1b")
             .unwrap_or_else(|| panic!("row"));
         assert!(
-            row.flags.iter().all(|f| !f.contains("no landing")),
+            row.flags.iter().all(|f| !f.contains("stalled")),
             "{:?}",
             row.flags
         );
-        assert_eq!(row.landings.reason(), Some("no source reads landings"));
+        assert_eq!(
+            row.landings.reason(),
+            Some("landings not configured; add [adapters.jj] or [adapters.git]")
+        );
         // an instant before the horizon is unknown with the horizon named,
         // never "no landing"
         let mut events = base();
@@ -980,14 +984,14 @@ mod tests {
             .find(|r| r.seat == "x-1b")
             .unwrap_or_else(|| panic!("row"));
         assert!(
-            row.flags.iter().all(|f| !f.contains("no landing")),
+            row.flags.iter().all(|f| !f.contains("stalled")),
             "{:?}",
             row.flags
         );
         assert!(
             row.landings
                 .reason()
-                .is_some_and(|w| w.starts_with("landings are read from 2026-10-09")),
+                .is_some_and(|w| w.starts_with("landings not available before 2026-10-09")),
             "{:?}",
             row.landings
         );
@@ -1082,7 +1086,7 @@ mod tests {
         );
         let text = crate::render::board(&b);
         assert!(
-            text.contains("x-shared is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=<seat> or bd update x-shared --assignee <seat>"),
+            text.contains("x-shared is claimed by 'Flower Ornament', which isn't a seat; set BEADS_ACTOR=<seat> or bd update x-shared --assignee <seat>"),
             "{text}"
         );
         // a project with no bd is never told to run bd
@@ -1158,10 +1162,7 @@ mod tests {
         };
         let with = flags("[goal]\n[seats.x-1a]\n");
         assert!(with.contains(&"over budget on x-g".to_owned()), "{with:?}");
-        assert!(
-            with.contains(&"2 goals in progress, WIP 1".to_owned()),
-            "{with:?}"
-        );
+        assert!(with.contains(&"WIP 2/1".to_owned()), "{with:?}");
         let without = flags("[seats.x-1a]\n");
         assert!(
             !without
@@ -1197,12 +1198,15 @@ mod tests {
         // every goal is in the output; the text gives one line per identity
         assert_eq!(b.unseated.get().map(Vec::len), Some(4));
         let text = crate::render::board(&b);
-        let notes: Vec<&str> = text.lines().filter(|l| l.contains("not a seat")).collect();
+        let notes: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("isn't a seat"))
+            .collect();
         assert_eq!(
             notes,
             vec![
-                "x-d is claimed by '2b', which is not a seat; set BEADS_ACTOR=<seat> or bd update x-d --assignee <seat>",
-                "3 goals (x-a, +2) are claimed by 'Shared User', which is not a seat; set BEADS_ACTOR=<seat> or bd update <goal> --assignee <seat>",
+                "x-d is claimed by '2b', which isn't a seat; set BEADS_ACTOR=<seat> or bd update x-d --assignee <seat>",
+                "3 goals (x-a, +2) are claimed by 'Shared User', which isn't a seat; set BEADS_ACTOR=<seat> or bd update <goal> --assignee <seat>",
             ]
         );
     }
@@ -1225,7 +1229,7 @@ mod tests {
         };
         assert_eq!(
             flags("[project]\nland_recipe = \"ship\"\n[seats.x-1a]\n"),
-            vec!["last land refused".to_owned()]
+            vec!["last land failed".to_owned()]
         );
         assert_eq!(flags("[seats.x-1a]\n"), Vec::<String>::new());
     }
@@ -1307,7 +1311,7 @@ mod tests {
             );
             // the seat with nothing is folded, and named
             assert!(
-                text.contains("1 quiet seat (--all shows it): proj-2b"),
+                text.contains("1 inactive seat hidden (--all to show): proj-2b"),
                 "{text}"
             );
             assert!(!text.lines().any(|l| l.starts_with("proj-2b ")), "{text}");
