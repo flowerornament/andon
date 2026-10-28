@@ -306,7 +306,10 @@ pub fn describe(
         rev,
     )?;
     let [commit] = commits.as_slice() else {
-        anyhow::bail!("{rev} names {} commits; name exactly one", commits.len());
+        anyhow::bail!(
+            "{rev} resolves to {} commits; give a revision that resolves to one",
+            commits.len()
+        );
     };
     let parsed = Parsed::new(&commit.description, &jc.trailers, &config.goal_regex()?);
     Ok(crate::commit::Commit {
@@ -412,13 +415,13 @@ fn op_heads(dir: &Path) -> Result<Vec<String>> {
         .find(|d| d.join(".jj").exists())
         .ok_or_else(|| anyhow::anyhow!("{} is not in a jj repository", dir.display()))?;
     let store = store(root)
-        .ok_or_else(|| anyhow::anyhow!("cannot read the jj store of {}", root.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("failed to read the jj store of {}", root.display()))?;
     let listed = std::fs::read_dir(store.join("op_heads").join("heads"))
-        .with_context(|| format!("cannot list operation heads in {}", store.display()))?;
+        .with_context(|| format!("failed to list operation heads in {}", store.display()))?;
     let mut heads = Vec::new();
     for entry in listed {
-        let entry =
-            entry.with_context(|| format!("cannot list operation heads in {}", store.display()))?;
+        let entry = entry
+            .with_context(|| format!("failed to list operation heads in {}", store.display()))?;
         heads.push(entry.file_name().to_string_lossy().into_owned());
     }
     heads.sort();
@@ -481,7 +484,7 @@ fn op_log(repo: &Repo<'_>, since: Option<Timestamp>) -> Result<Vec<JjOp>> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("cannot run jj ({e}); {FIX}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to run jj ({e}); {FIX}"))?;
     let mut ops = Vec::new();
     let mut read: HashSet<String> = HashSet::new();
     // operations named as parents and not yet read

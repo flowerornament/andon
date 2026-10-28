@@ -127,7 +127,7 @@ pub fn describe(config: &Config, gc: &GitConfig, rev: &str) -> Result<crate::com
     let commit = parse_log(&out)
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow::anyhow!("git names no commit {rev}"))?;
+        .ok_or_else(|| anyhow::anyhow!("commit {rev} not found in git"))?;
     let parsed = super::jj::Parsed::new(&commit.message, &gc.trailers, &config.goal_regex()?);
     Ok(crate::commit::Commit {
         id: commit.id,

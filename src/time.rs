@@ -115,7 +115,7 @@ impl Window {
         if let Some(span) = ago(text) {
             let from = now
                 .checked_sub(span)
-                .map_err(|_| anyhow::anyhow!("{text:?} reaches before any time andon can read"))?;
+                .map_err(|_| anyhow::anyhow!("{text:?} is out of range"))?;
             return Ok(Self {
                 from,
                 to: now,

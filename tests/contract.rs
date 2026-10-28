@@ -257,7 +257,12 @@ fn judge(case: &Case, dir: &Path, toml: &str) -> Result<(), String> {
         String::from_utf8_lossy(&out.stderr)
     );
     match (case.expect, out.status.code()) {
-        (Expect::Refused, Some(2)) if said.contains(&format!("adapter {}", case.adapter)) => Ok(()),
+        (Expect::Refused, Some(2))
+            if said.contains(&format!("[adapters.{}]", case.adapter))
+                || said.contains(&format!("{} adapter", case.adapter)) =>
+        {
+            Ok(())
+        }
         (Expect::Refused, code) => Err(format!(
             "expected a refusal naming the adapter, got {code:?}: {said}"
         )),

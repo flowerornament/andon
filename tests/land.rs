@@ -141,7 +141,7 @@ fn land_refuses_an_uncited_commit_and_lands_a_cited_one() {
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert_eq!(refused.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("cites no goal; end its subject with (demo-abc)"),
+        stderr.contains("doesn't reference a goal; add (demo-abc) to its subject"),
         "{stderr}"
     );
     let main_before = repo.jj(
@@ -167,7 +167,7 @@ fn land_refuses_an_uncited_commit_and_lands_a_cited_one() {
     );
     assert!(stdout.contains("land: ok: "), "{stdout}");
     assert!(
-        stdout.contains("cites demo-abc, claimed by demo-1a"),
+        stdout.contains("references demo-abc, claimed by demo-1a"),
         "{stdout}"
     );
     let main_after = repo.jj(

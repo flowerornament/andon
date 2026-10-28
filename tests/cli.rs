@@ -84,7 +84,7 @@ fn a_refused_message_exits_1_with_one_line() {
     assert_eq!(out.status.code(), Some(1));
     let text = stdout(&out);
     assert_eq!(text.lines().count(), 1);
-    assert!(text.starts_with("refused: a ruling carries a decision"));
+    assert!(text.starts_with("error: a ruling is a decision message"));
     let ok = andon(&["check", "message", "fyi", "--text", "status"], dir.path());
     assert_eq!(ok.status.code(), Some(0));
 }
@@ -110,14 +110,14 @@ fn a_goal_check_refuses_missing_sections_and_warns_on_a_vague_done_when() {
     assert_eq!(missing.status.code(), Some(1));
     assert_eq!(
         stdout(&missing),
-        "refused: the description: add a \"## Done when\" section\n"
+        "error: the description: add a \"## Done when\" section\n"
     );
     let vague =
         run(b"## Why\n\nx\n\n## Done when\n\nimprove things\n\n## Budget\n\n2 agent-hours\n");
     assert_eq!(vague.status.code(), Some(0));
     assert_eq!(
         stdout(&vague),
-        "warn: the description: the Done when section names no command, number or limit a check could fail on: \"improve things\"\n"
+        "warning: the description: the Done when section has no command, number or limit that can fail: \"improve things\"\n"
     );
 }
 
@@ -425,10 +425,12 @@ fn without_a_goal_section_there_are_no_goal_checks_and_no_goal_columns() {
             assert_eq!(goal.status.code(), Some(0));
             assert_eq!(
                 stdout(&goal),
-                "ok: -: no goal schema is configured ([goal] in andon.toml), so there is nothing to check\n"
+                "ok: -: [goal] not configured in andon.toml; nothing to check\n"
             );
             assert_eq!(commit.status.code(), Some(0));
-            assert!(stdout(&commit).contains("so a commit need cite none"));
+            assert!(
+                stdout(&commit).contains("[goal] not configured in andon.toml; nothing to check")
+            );
         }
     }
 }

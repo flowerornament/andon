@@ -98,7 +98,7 @@ if [ -n "$check" ]; then
     [ -n "$commit" ] || continue
     # shellcheck disable=SC2086 # LAND_CHECK is a command line, split on purpose
     if ! verdict="$($check "$commit")"; then
-      refuse "${verdict#refused: }"
+      refuse "${verdict#error: }"
     fi
     echo "land: ${verdict}"
   done < <(jj log --no-graph -r "$bookmark..$candidate" -T 'commit_id ++ "\n"')

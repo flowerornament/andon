@@ -190,7 +190,7 @@ pub fn problems(description: &str, config: &Config) -> Vec<String> {
     }
     if config.goal.require_pool {
         match section(&found, "pool") {
-            None => problems.push("add a \"## Pool\" section naming a configured pool".into()),
+            None => problems.push("add a \"## Pool\" section with a configured pool".into()),
             Some(pool) if !config.pools.contains_key(pool.trim()) => problems.push(format!(
                 "pool {:?} is not configured; use one of: {}",
                 pool.trim(),
@@ -210,7 +210,7 @@ pub fn warnings(description: &str, config: &Config) -> Vec<String> {
     let found = sections(description);
     match section(&found, &config.goal.done_when) {
         Some(done) if cannot_fail(done, &config.goal.checkable) => vec![format!(
-            "the {} section names no command, number or limit a check could fail on: \"{}\"",
+            "the {} section has no command, number or limit that can fail: \"{}\"",
             config.goal.done_when,
             first_words(done)
         )],
@@ -424,7 +424,7 @@ mod tests {
         );
         assert_eq!(
             warnings(&goal, &Config::default()),
-            vec!["the Done when section names no command, number or limit a check could fail on: \"Improve the board layout\"".to_owned()]
+            vec!["the Done when section has no command, number or limit that can fail: \"Improve the board layout\"".to_owned()]
         );
     }
 

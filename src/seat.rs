@@ -261,6 +261,17 @@ pub enum Tracker {
 }
 
 impl Tracker {
+    /// Its name in a line: the tool, or the ledger when no core tracker is
+    /// configured.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Github => "gh",
+            Self::Bd => "bd",
+            Self::Other => "the ledger",
+        }
+    }
+
     #[must_use]
     pub const fn of(config: &Config) -> Self {
         if config.adapters.github.is_some() {
@@ -282,7 +293,7 @@ pub fn claim_hint(config: &Config, id: &str) -> String {
             id.trim_start_matches('#')
         ),
         Tracker::Bd => format!("bd update {id} --claim"),
-        Tracker::Other => format!("claim {id} in the tracker"),
+        Tracker::Other => format!("claim {id} where your goals are tracked"),
     }
 }
 
@@ -296,7 +307,7 @@ pub fn identity_hint(config: &Config, id: &str, seat: &str) -> String {
         ),
         Tracker::Bd => format!("set BEADS_ACTOR={seat} or bd update {id} --assignee {seat}"),
         Tracker::Other => {
-            format!("make the tracker record {seat}, by a name [seats] lists, as {id}'s assignee")
+            format!("set {id}'s assignee to {seat}, or to an alias in [seats.{seat}]")
         }
     }
 }
@@ -385,7 +396,10 @@ aliases = ["1b-bot"]
         let none = with("");
         assert_eq!(claim_hint(&bd, "x-g"), "bd update x-g --claim");
         assert_eq!(claim_hint(&gh, "#4"), "gh issue edit 4 --add-assignee @me");
-        assert_eq!(claim_hint(&none, "x-g"), "claim x-g in the tracker");
+        assert_eq!(
+            claim_hint(&none, "x-g"),
+            "claim x-g where your goals are tracked"
+        );
         assert!(identity_hint_any(&gh, "#4").starts_with("assign #4"));
         for hint in [
             claim_hint(&none, "x-g"),

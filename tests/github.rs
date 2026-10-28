@@ -245,5 +245,9 @@ fn check_commit_reads_a_git_repository() {
     );
     // the merge names no goal in its message: refused, naming the fix
     assert!(answer.refused());
-    assert!(answer.line().contains("cites no goal"), "{}", answer.line());
+    assert!(
+        answer.line().contains("doesn't reference a goal"),
+        "{}",
+        answer.line()
+    );
 }

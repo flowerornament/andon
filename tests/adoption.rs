@@ -247,7 +247,7 @@ fn a_budget_can_come_from_a_numeric_tracker_field() {
     assert_eq!(unmapped.status.code(), Some(1));
     assert_eq!(
         stdout(&unmapped),
-        "refused: demo-min: add a \"## Budget\" section\n"
+        "error: demo-min: add a \"## Budget\" section\n"
     );
 
     std::fs::write(

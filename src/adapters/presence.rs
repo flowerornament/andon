@@ -83,12 +83,12 @@ pub fn collect(config: &Config, pc: &PresenceConfig) -> Result<Vec<Event>> {
 /// The process table: pid and start time. In UTC, as the harness records
 /// `procStart`; `ps` would otherwise print local time.
 fn ps() -> Result<String> {
-    let fix = "andon reads the process table with ps; install it, or remove [adapters.presence]";
+    let fix = "install ps, or remove [adapters.presence]";
     let output = command("ps", Path::new("."))
         .env("TZ", "UTC")
         .args(["-A", "-o", "pid=", "-o", "lstart="])
         .output()
-        .map_err(|e| anyhow::anyhow!("cannot run ps ({e}); {fix}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to run ps ({e}); {fix}"))?;
     if !output.status.success() {
         anyhow::bail!(
             "ps failed: {}",

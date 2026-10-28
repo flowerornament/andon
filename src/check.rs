@@ -1,6 +1,6 @@
 //! The refusals (founding design §7). Each is called from a choke point the
 //! project already owns (its land verb, its goal creation, its messenger's
-//! send), prints one line, and exits 1 when it refuses. The line names the fix.
+//! send), prints one line, and exits 1 on an error. An error ends with its fix.
 //!
 //! | check            | refuses when                                         |
 //! |------------------|------------------------------------------------------|
@@ -8,7 +8,7 @@
 //! |                  | claimed by the committing seat; the seat is past WIP |
 //! | `check goal`     | a section is missing; the done-when cannot fail; the |
 //! |                  | budget is unbounded; the pool is at its cap        |
-//! | `check message`  | a decision kind names no goal, or a closed one       |
+//! | `check message`  | a decision message has no goal, or a closed one      |
 
 use std::collections::BTreeMap;
 
@@ -35,8 +35,8 @@ impl Answer {
     pub fn line(&self) -> String {
         match self {
             Self::Ok(s) => format!("ok: {s}"),
-            Self::Warn(s) => format!("warn: {s}"),
-            Self::Refused(s) => format!("refused: {s}"),
+            Self::Warn(s) => format!("warning: {s}"),
+            Self::Refused(s) => format!("error: {s}"),
         }
     }
 
@@ -52,7 +52,7 @@ pub fn commit(commit: &Commit, ledger: &Ledger, config: &Config, now: Timestamp)
     let short = commit.id.get(..12).unwrap_or(&commit.id);
     if !config.goal_schema() {
         return Answer::Ok(format!(
-            "{short}: no goal schema is configured ([goal] in andon.toml), so a commit need cite none"
+            "{short}: [goal] not configured in andon.toml; nothing to check"
         ));
     }
     let items = Index::new(ledger).items_at(now);
@@ -65,11 +65,11 @@ pub fn commit(commit: &Commit, ledger: &Ledger, config: &Config, now: Timestamp)
     };
     let Ok(pattern) = config.goal_regex() else {
         return Answer::Refused(
-            "project.goal_pattern does not compile; fix it in andon.toml".into(),
+            "project.goal_pattern is not a valid regex; fix it in andon.toml".into(),
         );
     };
     let candidates = goal::candidates(&pattern, &commit.title, &commit.message, config);
-    // the likeliest citation the tracker has; else the likeliest at all
+    // the likeliest reference to a known goal; else the likeliest at all
     let known = candidates.iter().find(|g| items.contains_key(*g)).cloned();
     let Some(goal) = known.or_else(|| candidates.first().cloned()) else {
         let example = commit
@@ -78,39 +78,42 @@ pub fn commit(commit: &Commit, ledger: &Ledger, config: &Config, now: Timestamp)
             .and_then(|s| held(s).first().map(|g| (*g).clone()))
             .unwrap_or_else(|| "goal-id".into());
         return Answer::Refused(format!(
-            "{short} cites no goal; end its subject with ({example}): jj describe -r {short}"
+            "{short} doesn't reference a goal; add ({example}) to its subject: jj describe -r {short}"
         ));
     };
     let Some(seat) = commit.seat.as_deref() else {
         return Answer::Refused(format!(
-            "{short} names no seat; describe it from your workspace so its trailers name you, or pass --seat"
+            "{short} has no seat; describe it from your workspace so its trailers record your seat, or pass --seat"
         ));
     };
     let Some(item) = items.get(&goal) else {
         return Answer::Refused(format!(
-            "{short} cites {goal}, which the tracker does not have; cite an existing goal"
+            "{short} references {goal}, not found in {}; reference an existing goal",
+            crate::seat::Tracker::of(config).name()
         ));
     };
     if let Some(refusal) = held_by(item, &goal, seat, config) {
-        return Answer::Refused(format!("{short} cites {goal}, but {refusal}"));
+        return Answer::Refused(format!("{short} references {goal}, but {refusal}"));
     }
-    let holding = held(seat);
+    let claimed = held(seat);
     let wip = config.wip_for(seat);
-    if holding.len() > wip {
-        let list: Vec<&str> = holding.iter().map(|g| g.as_str()).collect();
+    if claimed.len() > wip {
+        let list: Vec<&str> = claimed.iter().map(|g| g.as_str()).collect();
         return Answer::Refused(format!(
-            "{seat} holds {} goals, WIP {wip}; land or park one of: {}",
-            holding.len(),
+            "{seat} has {} goals claimed, WIP {wip}; land or unclaim one of: {}",
+            claimed.len(),
             list.join(", ")
         ));
     }
-    Answer::Ok(format!("{short} cites {goal}, claimed by {seat}"))
+    Answer::Ok(format!("{short} references {goal}, claimed by {seat}"))
 }
 
 /// Why `seat` may not land on the goal, or `None` when it may.
 fn held_by(item: &Item, goal: &str, seat: &str, config: &Config) -> Option<String> {
     if item.closed {
-        return Some(format!("{goal} is closed; cite an open goal, or reopen it"));
+        return Some(format!(
+            "{goal} is closed; reference an open goal, or reopen it"
+        ));
     }
     match (&item.owner, item.claimed) {
         (Some(owner), true) if owner == seat => None,
@@ -123,7 +126,7 @@ fn held_by(item: &Item, goal: &str, seat: &str, config: &Config) -> Option<Strin
             ))
         }
         (Some(owner), true) => Some(format!(
-            "{goal} is claimed by {owner}, not {seat}; cite a goal you hold"
+            "{goal} is claimed by {owner}, not {seat}; reference a goal you claimed"
         )),
         _ => Some(format!(
             "{goal} is not claimed; claim it: {}",
@@ -143,7 +146,7 @@ pub fn goal(
 ) -> Answer {
     if !config.goal_schema() {
         return Answer::Ok(format!(
-            "{id}: no goal schema is configured ([goal] in andon.toml), so there is nothing to check"
+            "{id}: [goal] not configured in andon.toml; nothing to check"
         ));
     }
     // every problem, in the one line: a fix left unnamed is a second refusal
@@ -158,7 +161,7 @@ pub fn goal(
         let open = open_in_pool(ledger, pool, id, now);
         if open.len() >= cap {
             return Answer::Refused(format!(
-                "pool {pool} holds {} open goals, cap {cap}; land or defer one of: {}",
+                "pool {pool} has {} open goals, cap {cap}; land or defer one of: {}",
                 open.len(),
                 open.join(", ")
             ));
@@ -168,7 +171,7 @@ pub fn goal(
         return Answer::Warn(format!("{id}: {advice}"));
     }
     Answer::Ok(format!(
-        "{id} has its sections, a done-when naming a check, and a finite budget"
+        "{id} has every section, a done-when that can fail, and a finite budget"
     ))
 }
 
@@ -203,8 +206,13 @@ pub fn message(
     let kind = kind.as_str();
     let known = &config.messages.kinds;
     if !known.is_empty() && !known.iter().any(|k| k.eq_ignore_ascii_case(kind)) {
+        let tool = if config.adapters.hail.is_some() {
+            "hail "
+        } else {
+            ""
+        };
         return Answer::Refused(format!(
-            "{kind} is not a kind the messenger defines; use one of: {}",
+            "{kind} is not a {tool}message kind; use one of: {}",
             known.join(", ")
         ));
     }
@@ -219,26 +227,27 @@ pub fn message(
     let Some(goal) = found else {
         if decision {
             return Answer::Refused(format!(
-                "{} {kind} carries a decision; name the goal it serves (--goal <id>, or its id in the headline)",
+                "{} {kind} is a decision message and doesn't reference a goal; pass --goal <id>, or put the goal's id in the headline",
                 article(kind)
             ));
         }
         return Answer::Ok(format!(
-            "{} {kind} is not a decision; no goal needed",
+            "{} {kind} isn't a decision message; no goal needed",
             article(kind)
         ));
     };
     let items = Index::new(ledger).items_at(now);
-    // with a tracker in the ledger, a goal it does not have is no goal
+    // with goals in the ledger, an id not among them is no goal
     if decision && !items.is_empty() && !items.contains_key(&goal) {
         return Answer::Refused(format!(
-            "{} {kind} names {goal}, which the tracker does not have; name an existing goal",
-            article(kind)
+            "{} {kind} references {goal}, not found in {}; reference an existing goal",
+            article(kind),
+            crate::seat::Tracker::of(config).name()
         ));
     }
     if decision && items.get(&goal).is_some_and(|i| i.closed) {
         return Answer::Refused(format!(
-            "{goal} is closed; {} {kind} about it decides nothing. Name an open goal",
+            "{} {kind} references {goal}, which is closed; reference an open goal",
             article(kind)
         ));
     }
@@ -331,7 +340,7 @@ mod tests {
     fn a_commit_citing_a_held_goal_passes() {
         assert_eq!(
             check("board: rows (andon-xa4)", Some("andon-1b"), ""),
-            Answer::Ok("7d1c241adb66 cites andon-xa4, claimed by andon-1b".into())
+            Answer::Ok("7d1c241adb66 references andon-xa4, claimed by andon-1b".into())
         );
     }
 
@@ -339,7 +348,7 @@ mod tests {
     fn an_uncited_commit_is_refused_with_the_seats_goal_as_the_fix() {
         assert_eq!(
             check("board: rows", Some("andon-1b"), "").line(),
-            "refused: 7d1c241adb66 cites no goal; end its subject with (andon-xa4): jj describe -r 7d1c241adb66"
+            "error: 7d1c241adb66 doesn't reference a goal; add (andon-xa4) to its subject: jj describe -r 7d1c241adb66"
         );
     }
 
@@ -347,7 +356,7 @@ mod tests {
     fn a_goal_held_by_another_seat_is_refused() {
         assert_eq!(
             check("board: rows (andon-1a1)", Some("andon-1b"), "").line(),
-            "refused: 7d1c241adb66 cites andon-1a1, but andon-1a1 is claimed by andon-1a, not andon-1b; cite a goal you hold"
+            "error: 7d1c241adb66 references andon-1a1, but andon-1a1 is claimed by andon-1a, not andon-1b; reference a goal you claimed"
         );
     }
 
@@ -388,7 +397,7 @@ mod tests {
         // would loop, since claiming again assigns the same actor
         assert_eq!(
             check("x (andon-sh1)", Some("andon-1b"), "").line(),
-            "refused: 7d1c241adb66 cites andon-sh1, but andon-sh1 is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=andon-1b or bd update andon-sh1 --assignee andon-1b"
+            "error: 7d1c241adb66 references andon-sh1, but andon-sh1 is claimed by 'Flower Ornament', which is not a seat; set BEADS_ACTOR=andon-1b or bd update andon-sh1 --assignee andon-1b"
         );
     }
 
@@ -396,7 +405,7 @@ mod tests {
     fn unclaimed_closed_and_unknown_goals_are_refused() {
         assert_eq!(
             check("x (andon-76c)", Some("andon-1b"), "").line(),
-            "refused: 7d1c241adb66 cites andon-76c, but andon-76c is not claimed; claim it: bd update andon-76c --claim"
+            "error: 7d1c241adb66 references andon-76c, but andon-76c is not claimed; claim it: bd update andon-76c --claim"
         );
         assert!(
             check("x (andon-old)", Some("andon-1b"), "")
@@ -406,12 +415,12 @@ mod tests {
         assert!(
             check("x (andon-zzz)", Some("andon-1b"), "")
                 .line()
-                .contains("the tracker does not have")
+                .contains("not found in bd")
         );
         assert!(
             check("x (andon-xa4)", None, "")
                 .line()
-                .contains("names no seat")
+                .contains("has no seat")
         );
     }
 
@@ -434,7 +443,7 @@ mod tests {
         };
         assert_eq!(
             super::commit(&commit, &l, &c, at("2026-10-13T12:00:00Z")).line(),
-            "refused: andon-1b holds 2 goals, WIP 1; land or park one of: andon-76c, andon-xa4"
+            "error: andon-1b has 2 goals claimed, WIP 1; land or unclaim one of: andon-76c, andon-xa4"
         );
     }
 
@@ -451,11 +460,11 @@ mod tests {
         let now = at("2026-10-13T12:00:00Z");
         assert_eq!(
             goal("andon-new", "## Why\n\nx\n", &l, &c, now).line(),
-            "refused: andon-new: add a \"## Done when\" section; add a \"## Budget\" section"
+            "error: andon-new: add a \"## Done when\" section; add a \"## Budget\" section"
         );
         assert_eq!(
             goal("andon-new", GOAL, &l, &c, now).line(),
-            "refused: pool core holds 1 open goals, cap 1; land or defer one of: andon-76c"
+            "error: pool core has 1 open goals, cap 1; land or defer one of: andon-76c"
         );
         let roomy = config("[pools.core]\ncap = 2\nseats = [\"andon-1b\"]\n");
         assert!(!goal("andon-new", GOAL, &l, &roomy, now).refused());
@@ -468,7 +477,7 @@ mod tests {
         let now = at("2026-10-13T12:00:00Z");
         assert_eq!(
             message("ask", None, "can you review?", &l, &c, now).line(),
-            "refused: an ask carries a decision; name the goal it serves (--goal <id>, or its id in the headline)"
+            "error: an ask is a decision message and doesn't reference a goal; pass --goal <id>, or put the goal's id in the headline"
         );
         assert!(!message("ask", None, "review andon-xa4?", &l, &c, now).refused());
         assert!(!message("fyi", None, "status", &l, &c, now).refused());
@@ -476,12 +485,12 @@ mod tests {
         assert!(message("GO", None, "", &l, &c, now).refused());
         assert_eq!(
             message("rulling", None, "", &l, &c, now).line(),
-            "refused: rulling is not a kind the messenger defines; use one of: ask, go, nogo, ruling, block, stop, fyi, done, announce, hold, release"
+            "error: rulling is not a message kind; use one of: ask, go, nogo, ruling, block, stop, fyi, done, announce, hold, release"
         );
         assert!(message("go", Some("andon-old"), "", &l, &c, now).refused());
         assert_eq!(
             message("go", Some("andon-zzz"), "", &l, &c, now).line(),
-            "refused: a go names andon-zzz, which the tracker does not have; name an existing goal"
+            "error: a go references andon-zzz, not found in bd; reference an existing goal"
         );
     }
 }

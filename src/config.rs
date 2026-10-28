@@ -666,7 +666,7 @@ impl Config {
     /// When none was set.
     pub fn capture(&self) -> Result<jiff::Timestamp> {
         self.capture.ok_or_else(|| {
-            anyhow::anyhow!("no capture instant: set config.capture before reading sources")
+            anyhow::anyhow!("config.capture is not set; set it before reading adapters")
         })
     }
 
@@ -693,14 +693,16 @@ impl Config {
         }
         Regex::new(&config.project.goal_pattern).with_context(|| {
             format!(
-                "project.goal_pattern {:?} is not a regular expression",
+                "project.goal_pattern {:?} is not a valid regex",
                 config.project.goal_pattern
             )
         })?;
         for (name, pool) in &config.pools {
             for seat in &pool.seats {
                 if !config.seats.contains_key(seat) {
-                    bail!("pool {name} names seat {seat}, which [seats] does not define");
+                    bail!(
+                        "pool {name} lists seat {seat}, which is not in [seats]; add [seats.{seat}] or remove it from the pool"
+                    );
                 }
             }
         }
@@ -713,7 +715,7 @@ impl Config {
     /// When the file cannot be read or parsed.
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
-            .with_context(|| format!("cannot read {}", path.display()))?;
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let root = path
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -817,7 +819,9 @@ mod tests {
             .map(|e| e.to_string());
         assert_eq!(
             err.as_deref(),
-            Some("pool p names seat ghost, which [seats] does not define")
+            Some(
+                "pool p lists seat ghost, which is not in [seats]; add [seats.ghost] or remove it from the pool"
+            )
         );
     }
 

@@ -97,7 +97,9 @@ pub fn collect(config: &Config, fc: &FerryConfig) -> Result<Vec<Event>> {
         }
     }
     if duplicates > 0 && std::env::var_os("ANDON_TRACE").is_some() {
-        eprintln!("andon: ferry: {duplicates} receipts kept in more than one place, read once");
+        eprintln!(
+            "warning: ferry: {duplicates} receipts are kept in more than one place; each is read once"
+        );
     }
     // runs are covered from the oldest receipt kept to now; before it, or
     // with no receipts at all, the ledger cannot say how many runs there were

@@ -1092,7 +1092,7 @@ mod tests {
             !text.contains("bd ") && !text.contains("BEADS_ACTOR"),
             "{text}"
         );
-        assert!(text.contains("make the tracker record <seat>"), "{text}");
+        assert!(text.contains("set x-shared's assignee to <seat>"), "{text}");
     }
 
     #[test]

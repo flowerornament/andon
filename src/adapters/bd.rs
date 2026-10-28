@@ -41,7 +41,7 @@ pub fn collect(config: &Config, bc: &BdConfig) -> Result<Vec<Event>> {
     // bd runs in its directory: one that cannot be read is the fault, not bd
     if let Err(e) = std::fs::read_dir(&dir) {
         anyhow::bail!(
-            "cannot read {} ({e}); fix its permissions, or point [adapters.bd] dir at the project",
+            "failed to read {} ({e}); fix its permissions, or point [adapters.bd] dir at the project",
             dir.display()
         );
     }
@@ -250,7 +250,7 @@ fn reconcile(
             format!("bd events ({source})"),
             None,
             format!(
-                "bd events ({source}): {id} changed ({}) with no row recorded, after {last} and by {at}",
+                "bd events ({source}): {id} changed ({}) between {last} and {at} with no event recorded",
                 covers.join(", ")
             ),
         );
@@ -550,7 +550,7 @@ pub fn history(
                         source.clone(),
                         None,
                         format!(
-                            "{source}: a {} row on {} stored at {raw} needs one of two time corrections, and no row near it says which",
+                            "{source}: the {} event on {} stored at {raw} has an ambiguous time zone, and no nearby event resolves it",
                             row.event_type, row.issue_id
                         ),
                     );

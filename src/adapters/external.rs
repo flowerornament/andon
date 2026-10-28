@@ -40,7 +40,7 @@ pub const CONTRACT: u32 = 1;
 pub fn collect(config: &Config, ec: &ExternalConfig) -> Result<Vec<Event>> {
     if ec.contract != CONTRACT {
         bail!(
-            "external adapter {} speaks contract {}, this andon reads contract {CONTRACT}; upgrade one of them",
+            "external adapter {} uses contract {}, but this andon supports contract {CONTRACT}; upgrade one of them",
             ec.name,
             ec.contract
         );
@@ -61,13 +61,13 @@ pub fn collect(config: &Config, ec: &ExternalConfig) -> Result<Vec<Event>> {
             .with_context(|| format!("external adapter {}", ec.name))?;
         for path in found {
             let text = std::fs::read_to_string(&path)
-                .with_context(|| format!("cannot read {}", path.display()))?;
+                .with_context(|| format!("failed to read {}", path.display()))?;
             events.extend(parse(&text, &ec.name, &path.display().to_string())?);
         }
     }
     if ec.command.is_empty() && ec.files.is_empty() {
         bail!(
-            "external adapter {} names no command and no files; give it one",
+            "external adapter {} has no command or files; set command or files",
             ec.name
         );
     }

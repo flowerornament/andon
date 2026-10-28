@@ -166,7 +166,7 @@ pub fn config(found: &Found) -> String {
     let name = &found.name;
     let _ = writeln!(
         out,
-        "# andon.toml for {name}, from what `andon init` found here. andon reads\n# the sources below and writes into none of them; see `andon --help`.\n"
+        "# andon.toml for {name}, from what `andon init` found here. andon reads\n# the adapters below and writes to none of them; see `andon --help`.\n"
     );
     let _ = writeln!(out, "[project]\nname = {}", toml_str(name));
     let prefix = found.bd_prefix.as_deref().unwrap_or(name);
@@ -186,11 +186,11 @@ pub fn config(found: &Found) -> String {
     );
     let _ = writeln!(
         out,
-        "# The gate recipe that is the land verb: its refusals are \"last land refused\".\nland_recipe = \"land\"\n"
+        "# The gate recipe that lands a change: a failed run shows as \"last land failed\".\nland_recipe = \"land\"\n"
     );
     let _ = writeln!(
         out,
-        "# Identity first: every fact joins to a seat by the name its tool recorded.\n# Each agent acts under its seat's name: with bd, BEADS_ACTOR=<seat>."
+        "# Identity first: every event matches a seat by the name its tool recorded.\n# Each agent acts under its seat's name: with bd, BEADS_ACTOR=<seat>."
     );
     let seats: Vec<String> = if found.workspaces.is_empty() {
         vec![format!("{name}-1a")]
@@ -235,7 +235,7 @@ pub fn config(found: &Found) -> String {
     }
     let _ = writeln!(
         out,
-        "\n# The goal schema: `check commit` and `check goal` hold work to it, and the\n# board shows goals and budgets. Remove [goal] for a board without them.\n[goal]\nsections = [\"Why\", \"Done when\", \"Budget\"]\nwip_per_seat = 1\n"
+        "\n# The goal schema: `check commit` and `check goal` check work against it, and the\n# board shows goals and budgets. Remove [goal] for a board without them.\n[goal]\nsections = [\"Why\", \"Done when\", \"Budget\"]\nwip_per_seat = 1\n"
     );
     let _ = writeln!(
         out,

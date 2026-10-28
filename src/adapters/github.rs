@@ -122,14 +122,14 @@ pub fn read_snapshot(dir: &Path) -> Snapshot {
         let got = std::fs::read_to_string(&path)
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    "the snapshot holds none".to_owned()
+                    "the snapshot has none".to_owned()
                 } else {
                     e.to_string()
                 }
             })
             .and_then(|text| values(&text).map_err(|e| format!("not JSON ({e})")));
         got.unwrap_or_else(|why| {
-            if name != "events.json" || !why.starts_with("the snapshot holds none") {
+            if name != "events.json" || !why.starts_with("the snapshot has none") {
                 absent.push((name.to_owned(), why));
             }
             Vec::new()

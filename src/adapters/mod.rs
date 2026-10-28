@@ -84,9 +84,12 @@ fn run_adapters(
     let mut events: Vec<Event> = Vec::new();
     for read in read_all(config, messages, sessions) {
         let name = read.name;
-        let mut got = read
-            .got
-            .with_context(|| format!("adapter {name} (see its [adapters] table in andon.toml)"))?;
+        let mut got = read.got.with_context(|| {
+            name.strip_prefix("external ").map_or_else(
+                || format!("[adapters.{name}] in andon.toml"),
+                |n| format!("external adapter {n}"),
+            )
+        })?;
         // every coverage fact names the adapter that read it; an external
         // adapter's events already carry its own name
         for e in got.iter_mut().filter(|e| {
@@ -257,7 +260,7 @@ pub fn run_tool_in(dir: &std::path::Path, tool: &str, args: &[&str], fix: &str) 
     command.args(args);
     let output = command
         .output()
-        .map_err(|e| anyhow::anyhow!("cannot run {tool} ({e}); {fix}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to run {tool} ({e}); {fix}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let first = stderr
@@ -409,7 +412,7 @@ pub fn glob_all(pattern: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     let mut reads = Reads::default();
     let found = reads.glob(pattern);
     if let Some((path, why)) = reads.unreadable.first() {
-        anyhow::bail!("cannot list {}: {why}", path.display());
+        anyhow::bail!("failed to list {}: {why}", path.display());
     }
     Ok(found)
 }

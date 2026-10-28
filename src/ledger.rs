@@ -105,7 +105,7 @@ impl Ledger {
     pub fn read(reader: impl BufRead) -> Result<Self> {
         let mut events = Vec::new();
         for (index, line) in reader.lines().enumerate() {
-            let line = line.context("reading the ledger")?;
+            let line = line.context("failed to read the ledger")?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -123,7 +123,7 @@ impl Ledger {
     /// When the file cannot be read or a line is not an event.
     pub fn open(path: &std::path::Path) -> Result<Self> {
         let file = std::fs::File::open(path)
-            .with_context(|| format!("cannot read ledger {}", path.display()))?;
+            .with_context(|| format!("failed to read ledger {}", path.display()))?;
         Self::read(std::io::BufReader::new(file))
     }
 
